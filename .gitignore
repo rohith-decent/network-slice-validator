@@ -4,3 +4,8 @@ __pycache__/
 *.pyo
 .env
 !ml/model.pkl
+data/
+ml/model.pkl
+*.shm
+*.wal
+
