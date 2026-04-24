@@ -1,0 +1,93 @@
+version: "3.9"
+
+networks:
+  slice_a_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.1.0/24
+  slice_b_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.2.0/24
+  monitor_net:
+    driver: bridge
+
+volumes:
+  db_data:
+  model_data:
+
+services:
+
+  # ─── Virtual Network Slice A ────────────────────────────────────────
+  slice-a:
+    image: networkstatic/iperf3
+    container_name: slice-a
+    hostname: slice-a
+    command: ["iperf3", "-s", "--foreground"]
+    # Keep alive with a simple server; iperf3 -s stays running
+    entrypoint: >
+      sh -c "apk add --no-cache iputils busybox-extras 2>/dev/null;
+             iperf3 -s --foreground 2>/dev/null || iperf3 -s"
+    networks:
+      - slice_a_net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
+    restart: unless-stopped
+
+  # ─── Virtual Network Slice B ────────────────────────────────────────
+  slice-b:
+    image: networkstatic/iperf3
+    container_name: slice-b
+    hostname: slice-b
+    entrypoint: >
+      sh -c "apk add --no-cache iputils busybox-extras 2>/dev/null;
+             iperf3 -s --foreground 2>/dev/null || iperf3 -s"
+    networks:
+      - slice_b_net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
+    restart: unless-stopped
+
+  # ─── Main Service (Collector + API + Dashboard) ─────────────────────
+  main-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: main-service
+    environment:
+      - DB_PATH=/data/metrics.db
+      - MODEL_PATH=/ml/model.pkl
+      - COLLECTOR_INTERVAL=5
+      - API_PORT=8000
+      - DASHBOARD_PORT=8501
+      - SLICE_NAMES=slice-a,slice-b
+      - LOG_LEVEL=INFO
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - db_data:/data
+      - model_data:/ml
+    networks:
+      - slice_a_net
+      - slice_b_net
+      - monitor_net
+    ports:
+      - "8000:8000"   # FastAPI
+      - "8501:8501"   # Streamlit
+    depends_on:
+      - slice-a
+      - slice-b
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

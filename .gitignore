@@ -1,0 +1,6 @@
+data/metrics.db
+__pycache__/
+*.pyc
+*.pyo
+.env
+!ml/model.pkl
