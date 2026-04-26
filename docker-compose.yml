@@ -74,6 +74,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - db_data:/data
       - model_data:/ml
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - slice_a_net
       - slice_b_net
