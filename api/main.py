@@ -16,6 +16,9 @@ import os
 import time
 import sqlite3
 import logging
+import subprocess
+from fastapi import BackgroundTasks
+from fastapi.responses import HTMLResponse
 from typing import Optional
 from contextlib import asynccontextmanager
 
@@ -36,6 +39,10 @@ load_dotenv(r"D:\hackathon\slice-monitor\.env")
 DB_PATH    = os.environ.get("DB_PATH",    r"D:\hackathon\slice-monitor\data\metrics.db")
 MODEL_PATH = os.environ.get("MODEL_PATH", r"D:\hackathon\slice-monitor\ml\model.pkl")
 SLICE_NAMES = [s.strip() for s in os.environ.get("SLICE_NAMES", "slice-a,slice-b").split(",")]
+# ── Demo Control Config ─────────────────────────────────────────────
+COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT_NAME", "network-slice-validator")
+BREACH_NETWORK  = f"{COMPOSE_PROJECT}_slice_b_net"
+_breach_active: bool = False
 
 # ── Global model bundle ───────────────────────────────────────────────────────
 
@@ -80,6 +87,28 @@ app.add_middleware(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+def _run_cmd(cmd: list, timeout: int = 15) -> tuple[bool, str]:
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return (True, res.stdout.strip()) if res.returncode == 0 else (False, res.stderr.strip())
+    except Exception as e:
+        return False, str(e)
+
+def _do_inject_breach():
+    global _breach_active
+    log.info("[demo] Injecting breach → %s", BREACH_NETWORK)
+    _run_cmd(["docker", "network", "connect", BREACH_NETWORK, "slice-a"])
+    _run_cmd(["docker", "exec", "-d", "slice-b", "iperf3", "-s"])
+    _run_cmd(["docker", "exec", "-d", "slice-a", "iperf3", "-c", "slice-b", "-t", "30", "-b", "5M"])
+    _breach_active = True
+    log.info("[demo] Breach active. Anomaly expected in ~15s.")
+
+def _do_restore_isolation():
+    global _breach_active
+    log.info("[demo] Restoring isolation → disconnecting %s", BREACH_NETWORK)
+    _run_cmd(["docker", "network", "disconnect", BREACH_NETWORK, "slice-a"])
+    _breach_active = False
+    log.info("[demo] Isolation restored.")
 
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -250,3 +279,29 @@ def reload_model():
     """Hot-reload the model from disk (useful after re-training)."""
     load_model()
     return {"status": "reloaded", "model_loaded": _bundle is not None}
+
+
+# ── Mobile Control Console Routes ───────────────────────────────────
+@app.get("/demo", response_class=HTMLResponse)
+def demo_page():
+    html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dashboard", "demo_control.html"))
+    if not os.path.exists(html_path):
+        return HTMLResponse("<h1>demo_control.html not found</h1>", status_code=404)
+    with open(html_path, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+@app.post("/demo/inject")
+def inject_breach(background_tasks: BackgroundTasks):
+    if _breach_active:
+        return {"status": "already_active", "breach_active": True}
+    background_tasks.add_task(_do_inject_breach)
+    return {"status": "injected", "message": "Breach started. Watch dashboard in ~15s.", "breach_active": True}
+
+@app.post("/demo/restore")
+def restore_isolation(background_tasks: BackgroundTasks):
+    background_tasks.add_task(_do_restore_isolation)
+    return {"status": "restoring", "message": "Isolation restoring. Recovery in 30-60s.", "breach_active": False}
+
+@app.get("/demo/status")
+def get_status():
+    return {"breach_active": _breach_active, "breach_network": BREACH_NETWORK, "timestamp": time.time()}
