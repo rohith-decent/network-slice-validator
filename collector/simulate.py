@@ -23,7 +23,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DB_PATH  = os.environ.get("DB_PATH",  r"D:\hackathon\slice-monitor\data\metrics.db")
+DB_PATH  = os.environ.get("DB_PATH",  r"D:\network-slice-validator\data\metrics.db")
 INTERVAL = int(os.environ.get("COLLECTOR_INTERVAL", "5"))
 
 # ── Breach flag (toggled by keyboard input thread) ────────────────────────────

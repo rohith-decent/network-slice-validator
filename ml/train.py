@@ -24,8 +24,10 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-DB_PATH      = os.environ.get("DB_PATH",    "/data/metrics.db")
-MODEL_PATH   = os.environ.get("MODEL_PATH", "/ml/model.pkl")
+from dotenv import load_dotenv
+load_dotenv(r"D:\network-slice-validator\.env")
+DB_PATH      = os.environ.get("DB_PATH",    r"D:\network-slice-validator\data\metrics.db")
+MODEL_PATH   = os.environ.get("MODEL_PATH", r"D:\network-slice-validator\ml\model.pkl")
 CONTAMINATION = float(os.environ.get("CONTAMINATION", "0.05"))
 N_ESTIMATORS  = int(os.environ.get("N_ESTIMATORS", "100"))
 FEATURE_NAMES = ["cpu_pct", "mem_mb", "net_rx_kb", "net_tx_kb"]

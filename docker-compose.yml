@@ -1,4 +1,4 @@
-version: "3.9"
+
 
 networks:
   slice_a_net:
@@ -15,8 +15,9 @@ networks:
     driver: bridge
 
 volumes:
-  db_data:
-  model_data:
+      - db_data:/data
+      - model_data:/ml
+      - /var/run/docker.sock:/var/run/docker.sock
 
 services:
 
@@ -70,11 +71,11 @@ services:
       - DASHBOARD_PORT=8501
       - SLICE_NAMES=slice-a,slice-b
       - LOG_LEVEL=INFO
+      - COLLECTOR_MODE=simulator
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - db_data:/data
       - model_data:/ml
-      - /var/run/docker.sock:/var/run/docker.sock
+      - //var/run/docker.sock:/var/run/docker.sock
     networks:
       - slice_a_net
       - slice_b_net
