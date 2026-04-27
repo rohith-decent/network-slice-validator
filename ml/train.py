@@ -24,14 +24,15 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-DB_PATH      = os.environ.get("DB_PATH",    "/data/metrics.db")
-MODEL_PATH   = os.environ.get("MODEL_PATH", "/ml/model.pkl")
+DB_PATH       = os.environ.get("DB_PATH",    "/data/metrics.db")
+MODEL_PATH    = os.environ.get("MODEL_PATH", "/ml/model.pkl")
 CONTAMINATION = float(os.environ.get("CONTAMINATION", "0.05"))
 N_ESTIMATORS  = int(os.environ.get("N_ESTIMATORS", "100"))
 FEATURE_NAMES = ["cpu_pct", "mem_mb", "net_rx_kb", "net_tx_kb"]
 MIN_SAMPLES   = 10   # Minimum rows needed to train
 
-# ── Load data ────────────────────────────────────────────────────────────────
+
+# ── Load data ─────────────────────────────────────────────────────────────────
 
 def load_features() -> np.ndarray:
     """
@@ -76,8 +77,6 @@ def print_stats(X: np.ndarray):
 
 
 # ── Augment baseline with mild synthetic variation ────────────────────────────
-# This improves model generalization when baseline is short (< 5 min).
-# The synthetic samples are within ±15% of observed ranges — NOT random noise.
 
 def augment(X: np.ndarray, factor: int = 3) -> np.ndarray:
     """
@@ -95,7 +94,7 @@ def augment(X: np.ndarray, factor: int = 3) -> np.ndarray:
     return combined
 
 
-# ── Train ────────────────────────────────────────────────────────────────────
+# ── Train ─────────────────────────────────────────────────────────────────────
 
 def train(X: np.ndarray) -> dict:
     # Scale features
@@ -121,24 +120,41 @@ def train(X: np.ndarray) -> dict:
     log.info("Decision scores — min=%.4f  max=%.4f  mean=%.4f",
              scores.min(), scores.max(), scores.mean())
 
+    # ── Per-feature means & stds on REAL (non-augmented) data ────────────────
+    # These are stored in the bundle so the API can compute Z-scores at
+    # inference time to classify what kind of attack was detected.
+    # We always compute these from X (the real baseline rows passed in),
+    # so they reflect genuine idle behaviour, not the synthetic augmentation.
+    feature_means = {name: float(X[:, i].mean()) for i, name in enumerate(FEATURE_NAMES)}
+    feature_stds  = {
+        name: float(max(X[:, i].std(), 1e-6))   # guard against zero-std features
+        for i, name in enumerate(FEATURE_NAMES)
+    }
+    log.info("Feature means for classifier: %s", feature_means)
+    log.info("Feature stds  for classifier: %s", feature_stds)
+    # ─────────────────────────────────────────────────────────────────────────
+
     bundle = {
-        "scaler":        scaler,
-        "model":         model,
-        "feature_names": FEATURE_NAMES,
-        "trained_at":    time.time(),
-        "n_samples":     int(len(X)),
-        "contamination": CONTAMINATION,
+        "scaler":         scaler,
+        "model":          model,
+        "feature_names":  FEATURE_NAMES,
+        "trained_at":     time.time(),
+        "n_samples":      int(len(X)),
+        "contamination":  CONTAMINATION,
         "score_stats": {
             "min":  float(scores.min()),
             "max":  float(scores.max()),
             "mean": float(scores.mean()),
             "std":  float(scores.std()),
-        }
+        },
+        # ── NEW — used by classify_attack() in api/main.py ──────────────────
+        "feature_means":  feature_means,
+        "feature_stds":   feature_stds,
     }
     return bundle
 
 
-# ── Save ─────────────────────────────────────────────────────────────────────
+# ── Save ──────────────────────────────────────────────────────────────────────
 
 def save(bundle: dict):
     os.makedirs(os.path.dirname(MODEL_PATH) or ".", exist_ok=True)
@@ -161,6 +177,27 @@ if __name__ == "__main__":
     else:
         X_train = X_real
 
-    bundle = train(X_train)
+    # NOTE: always pass X_real (not X_train) so feature_means/stds reflect
+    # genuine idle behaviour, not the jittered synthetic copies.
+    bundle = train(X_real)
+
+    # Re-fit scaler and model on the full augmented set for better coverage,
+    # but keep the stats computed from real data above.
+    from sklearn.preprocessing import StandardScaler as _SS
+    from sklearn.ensemble import IsolationForest as _IF
+    _scaler2 = _SS()
+    _X2 = _scaler2.fit_transform(X_train)
+    _model2 = _IF(
+        n_estimators=N_ESTIMATORS,
+        contamination=CONTAMINATION,
+        max_samples="auto",
+        random_state=42,
+        n_jobs=-1,
+    )
+    _model2.fit(_X2)
+    bundle["scaler"]    = _scaler2
+    bundle["model"]     = _model2
+    bundle["n_samples"] = int(len(X_train))
+
     save(bundle)
     log.info("Done. Model ready for inference.")
