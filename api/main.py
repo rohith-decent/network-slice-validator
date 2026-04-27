@@ -14,6 +14,10 @@ Endpoints:
   GET  /incidents/export         – CSV download of incident log
   GET  /audit-log                – paginated anomaly audit table
   GET  /sla                      – SLA compliance % over rolling windows
+  GET  /demo                     – demo control console (HTML)
+  POST /demo/inject              – trigger network breach demo
+  POST /demo/restore             – restore isolation after demo
+  GET  /demo/status              – current demo breach status
 """
 
 import os
@@ -22,15 +26,17 @@ import sqlite3
 import asyncio
 import logging
 import threading
+import subprocess
+
 import joblib
 import numpy as np
 
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 import io
 
 logging.basicConfig(
@@ -42,6 +48,11 @@ log = logging.getLogger(__name__)
 DB_PATH    = os.environ.get("DB_PATH",    "/data/metrics.db")
 MODEL_PATH = os.environ.get("MODEL_PATH", "/ml/model.pkl")
 FEATURE_NAMES = ["cpu_pct", "mem_mb", "net_rx_kb", "net_tx_kb"]
+
+# ── Demo Control Config ─────────────────────────────────────────────
+COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT_NAME", "network-slice-validator")
+BREACH_NETWORK  = f"{COMPOSE_PROJECT}_slice_b_net"
+_breach_active: bool = False
 
 # ── Global model bundle ───────────────────────────────────────────────────────
 
@@ -302,6 +313,32 @@ app.add_middleware(
 )
 
 
+# ── Demo Helpers ──────────────────────────────────────────────────────────────
+
+def _run_cmd(cmd: list, timeout: int = 15) -> tuple[bool, str]:
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return (True, res.stdout.strip()) if res.returncode == 0 else (False, res.stderr.strip())
+    except Exception as e:
+        return False, str(e)
+
+def _do_inject_breach():
+    global _breach_active
+    log.info("[demo] Injecting breach → %s", BREACH_NETWORK)
+    _run_cmd(["docker", "network", "connect", BREACH_NETWORK, "slice-a"])
+    _run_cmd(["docker", "exec", "-d", "slice-b", "iperf3", "-s"])
+    _run_cmd(["docker", "exec", "-d", "slice-a", "iperf3", "-c", "slice-b", "-t", "30", "-b", "5M"])
+    _breach_active = True
+    log.info("[demo] Breach active. Anomaly expected in ~15s.")
+
+def _do_restore_isolation():
+    global _breach_active
+    log.info("[demo] Restoring isolation → disconnecting %s", BREACH_NETWORK)
+    _run_cmd(["docker", "network", "disconnect", BREACH_NETWORK, "slice-a"])
+    _breach_active = False
+    log.info("[demo] Isolation restored.")
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -495,3 +532,30 @@ def sla(
         "anomalous":  anomalous,
         "compliance": round(compliance, 4),
     }
+
+
+# ── Demo Control Console Routes ───────────────────────────────────────────────
+
+@app.get("/demo", response_class=HTMLResponse)
+def demo_page():
+    html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "dashboard", "demo_control.html"))
+    if not os.path.exists(html_path):
+        return HTMLResponse("<h1>demo_control.html not found</h1>", status_code=404)
+    with open(html_path, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+@app.post("/demo/inject")
+def inject_breach(background_tasks: BackgroundTasks):
+    if _breach_active:
+        return {"status": "already_active", "breach_active": True}
+    background_tasks.add_task(_do_inject_breach)
+    return {"status": "injected", "message": "Breach started. Watch dashboard in ~15s.", "breach_active": True}
+
+@app.post("/demo/restore")
+def restore_isolation(background_tasks: BackgroundTasks):
+    background_tasks.add_task(_do_restore_isolation)
+    return {"status": "restoring", "message": "Isolation restoring. Recovery in 30-60s.", "breach_active": False}
+
+@app.get("/demo/status")
+def get_status():
+    return {"breach_active": _breach_active, "breach_network": BREACH_NETWORK, "timestamp": time.time()}
