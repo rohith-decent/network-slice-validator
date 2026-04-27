@@ -1,4 +1,4 @@
-# Runtime artifacts — NEVER commit
+# Runtime artifacts ï¿½ NEVER commit
 data/
 ml/model.pkl
 
@@ -18,3 +18,7 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+
+
+venv/
+.venv/
