@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>5G Slice Control</title>
+  <style>
+    /* ─── Reset & Base ─────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 16px; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+    }
+
+    /* ─── Header ───────────────────────────────────────────────────── */
+    .header {
+      text-align: center;
+      margin-bottom: 28px;
+      width: 100%;
+      max-width: 480px;
+    }
+    .header .badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #58a6ff;
+      background: #1c2b3a;
+      border: 1px solid #1f4068;
+      border-radius: 20px;
+      padding: 4px 12px;
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: #f0f6fc;
+      line-height: 1.3;
+      margin-bottom: 6px;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #6b7280;
+    }
+
+    /* ─── Status Card ──────────────────────────────────────────────── */
+    .status-card {
+      width: 100%;
+      max-width: 480px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .status-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: background 0.4s;
+    }
+    .status-dot.normal  { background: #3fb950; box-shadow: 0 0 8px #3fb95088; }
+    .status-dot.breach  { background: #f85149; box-shadow: 0 0 8px #f8514988; animation: pulse 1s infinite; }
+    .status-dot.loading { background: #d29922; box-shadow: 0 0 8px #d2992288; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.4; }
+    }
+    .status-text { flex: 1; }
+    .status-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #c9d1d9;
+    }
+    .status-sub {
+      font-size: 12px;
+      color: #6b7280;
+      margin-top: 2px;
+    }
+
+    /* ─── Confidence Display ───────────────────────────────────────── */
+    .confidence-wrap {
+      width: 100%;
+      max-width: 480px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+    .confidence-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      margin-bottom: 10px;
+    }
+    .confidence-row {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+    }
+    .conf-block { flex: 1; }
+    .conf-name { font-size: 11px; color: #8b949e; margin-bottom: 4px; }
+    .conf-value {
+      font-size: 28px;
+      font-weight: 700;
+      transition: color 0.5s;
+    }
+    .conf-value.high   { color: #3fb950; }
+    .conf-value.medium { color: #d29922; }
+    .conf-value.low    { color: #f85149; }
+    .conf-bar-wrap {
+      height: 5px;
+      background: #21262d;
+      border-radius: 3px;
+      margin-top: 6px;
+      overflow: hidden;
+    }
+    .conf-bar {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.6s, background 0.5s;
+    }
+
+    /* ─── Action Buttons ───────────────────────────────────────────── */
+    .button-group {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .btn {
+      width: 100%;
+      border: none;
+      border-radius: 14px;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      padding: 22px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: transform 0.1s, opacity 0.2s, box-shadow 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    .btn-inject {
+      background: linear-gradient(135deg, #c62828, #f85149);
+      color: #fff;
+      box-shadow: 0 4px 20px #f8514940;
+    }
+    .btn-inject:hover:not(:disabled) { box-shadow: 0 6px 28px #f8514960; }
+    .btn-restore {
+      background: linear-gradient(135deg, #1a7a1a, #3fb950);
+      color: #fff;
+      box-shadow: 0 4px 20px #3fb95040;
+    }
+    .btn-restore:hover:not(:disabled) { box-shadow: 0 6px 28px #3fb95060; }
+    .btn-stress {
+      background: linear-gradient(135deg, #1a2a5a, #2979ff);
+      color: #fff;
+      box-shadow: 0 4px 20px #2979ff30;
+    }
+    .btn-icon { font-size: 22px; }
+
+    /* ─── Response Toast ───────────────────────────────────────────── */
+    .toast {
+      width: 100%;
+      max-width: 480px;
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 13px;
+      line-height: 1.5;
+      margin-bottom: 24px;
+      border-left: 4px solid;
+      display: none;
+      animation: slideIn 0.25s ease;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .toast.success { background: #0d1a0d; border-color: #3fb950; color: #7ee787; display: block; }
+    .toast.error   { background: #2d1117; border-color: #f85149; color: #f97071; display: block; }
+    .toast.info    { background: #0c1624; border-color: #58a6ff; color: #79c0ff; display: block; }
+
+    /* ─── Timeline ─────────────────────────────────────────────────── */
+    .timeline-card {
+      width: 100%;
+      max-width: 480px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+    }
+    .timeline-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      margin-bottom: 14px;
+    }
+    .timeline-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .timeline-step:last-child { margin-bottom: 0; }
+    .step-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #30363d;
+      flex-shrink: 0;
+      margin-top: 5px;
+    }
+    .step-dot.done   { background: #3fb950; }
+    .step-dot.active { background: #f85149; animation: pulse 1s infinite; }
+    .step-text { font-size: 13px; color: #8b949e; line-height: 1.4; }
+    .step-text strong { color: #c9d1d9; }
+
+    /* ─── Dashboard Link ───────────────────────────────────────────── */
+    .dash-link {
+      width: 100%;
+      max-width: 480px;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    .dash-link a {
+      color: #58a6ff;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .dash-link a:hover { text-decoration: underline; }
+
+    .footer {
+      font-size: 11px;
+      color: #3d444d;
+      text-align: center;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="badge">5G Slice Control Plane</div>
+    <h1>🛡️ Isolation Validator<br>Control Console</h1>
+    <p class="subtitle">Tap to inject or restore network slice breaches</p>
+  </div>
+
+  <!-- Status Card -->
+  <div class="status-card">
+    <div class="status-dot normal" id="statusDot"></div>
+    <div class="status-text">
+      <div class="status-label" id="statusLabel">Checking isolation status…</div>
+      <div class="status-sub" id="statusSub">Connecting to API…</div>
+    </div>
+  </div>
+
+  <!-- Confidence Display -->
+  <div class="confidence-wrap">
+    <div class="confidence-label">Live Isolation Confidence</div>
+    <div class="confidence-row">
+      <div class="conf-block">
+        <div class="conf-name">slice-a</div>
+        <div class="conf-value high" id="confA">—</div>
+        <div class="conf-bar-wrap">
+          <div class="conf-bar" id="barA" style="width:0%;background:#3fb950"></div>
+        </div>
+      </div>
+      <div class="conf-block">
+        <div class="conf-name">slice-b</div>
+        <div class="conf-value high" id="confB">—</div>
+        <div class="conf-bar-wrap">
+          <div class="conf-bar" id="barB" style="width:0%;background:#3fb950"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Action Buttons -->
+  <div class="button-group">
+    <button class="btn btn-inject" id="btnInject" onclick="triggerInject()">
+      <span class="btn-icon">💥</span>
+      INJECT BREACH
+    </button>
+    <button class="btn btn-restore" id="btnRestore" onclick="triggerRestore()">
+      <span class="btn-icon">🔒</span>
+      RESTORE ISOLATION
+    </button>
+    <button class="btn btn-stress" id="btnStress" onclick="triggerCpuStress()">
+      <span class="btn-icon">🔥</span>
+      CPU STRESS (slice-a)
+    </button>
+  </div>
+
+  <!-- Response Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Timeline -->
+  <div class="timeline-card">
+    <div class="timeline-title">⏱ Expected Timeline After Inject</div>
+    <div class="timeline-step">
+      <div class="step-dot done"></div>
+      <div class="step-text"><strong>0s</strong> — API receives breach command, Docker network connect executes</div>
+    </div>
+    <div class="timeline-step">
+      <div class="step-dot" id="t1"></div>
+      <div class="step-text"><strong>~5s</strong> — Collector picks up elevated network I/O delta</div>
+    </div>
+    <div class="timeline-step">
+      <div class="step-dot" id="t2"></div>
+      <div class="step-text"><strong>~8s</strong> — IsolationForest scores the anomalous row</div>
+    </div>
+    <div class="timeline-step">
+      <div class="step-dot" id="t3"></div>
+      <div class="step-text"><strong>~15s</strong> — Dashboard gauge drops below 40% (RED zone)</div>
+    </div>
+    <div class="timeline-step">
+      <div class="step-dot" id="t4"></div>
+      <div class="step-text"><strong>After restore</strong> — Confidence recovers to green in 30–60s</div>
+    </div>
+  </div>
+
+  <!-- Dashboard Link -->
+  <div class="dash-link">
+    <a href="javascript:void(0)" id="dashLink">📊 Open Operator Dashboard</a>
+  </div>
+
+  <div class="footer">5G/6G Network Slicing Isolation Validator · Hackathon Demo</div>
+
+<script>
+  // ── Config — auto-detects API base from current URL origin ─────────────────
+  const API = window.location.origin;   // e.g. http://192.168.1.42:8000
+  const DASH_PORT = 8501;
+  const POLL_INTERVAL_MS = 3000;
+
+  // Set dashboard link dynamically
+  const dashUrl = `${window.location.protocol}//${window.location.hostname}:${DASH_PORT}`;
+  document.getElementById('dashLink').href = dashUrl;
+  document.getElementById('dashLink').target = '_blank';
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let breachActive = false;
+  let injectTime   = null;
+
+  // ── Toast helper ───────────────────────────────────────────────────────────
+  function showToast(msg, type = 'info') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `toast ${type}`;
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => { t.style.display = 'none'; }, 6000);
+  }
+
+  // ── Confidence colour helper ───────────────────────────────────────────────
+  function confClass(val) {
+    if (val === null || val === undefined) return 'high';
+    if (val >= 70) return 'high';
+    if (val >= 40) return 'medium';
+    return 'low';
+  }
+  function confColor(val) {
+    if (val >= 70) return '#3fb950';
+    if (val >= 40) return '#d29922';
+    return '#f85149';
+  }
+
+  // ── Update confidence displays ─────────────────────────────────────────────
+  function updateConf(sliceId, val) {
+    const elId = sliceId === 'slice-a' ? 'confA' : 'confB';
+    const barId = sliceId === 'slice-a' ? 'barA'  : 'barB';
+    const el  = document.getElementById(elId);
+    const bar = document.getElementById(barId);
+    if (el && val !== null && val !== undefined) {
+      el.textContent = `${val.toFixed(0)}%`;
+      el.className   = `conf-value ${confClass(val)}`;
+      bar.style.width      = `${Math.max(2, val)}%`;
+      bar.style.background = confColor(val);
+    }
+  }
+
+  // ── Update timeline dots ───────────────────────────────────────────────────
+  function updateTimeline(elapsed) {
+    const steps = [
+      { id: 't1', threshold: 5  },
+      { id: 't2', threshold: 8  },
+      { id: 't3', threshold: 15 },
+      { id: 't4', threshold: 999 },
+    ];
+    steps.forEach(s => {
+      const el = document.getElementById(s.id);
+      if (!el) return;
+      if (!breachActive) { el.className = 'step-dot'; return; }
+      if (elapsed >= s.threshold) {
+        el.className = 'step-dot done';
+      } else if (elapsed >= s.threshold - 2) {
+        el.className = 'step-dot active';
+      } else {
+        el.className = 'step-dot';
+      }
+    });
+    // t4 special — active only after restore
+    if (!breachActive && injectTime) {
+      document.getElementById('t4').className = 'step-dot active';
+    }
+  }
+
+  // ── Poll /score for live confidence values ─────────────────────────────────
+  async function pollScores() {
+    try {
+      const r = await fetch(`${API}/score`, { signal: AbortSignal.timeout(3000) });
+      if (!r.ok) return;
+      const data = await r.json();
+      const scores = Array.isArray(data) ? data : [data];
+      scores.forEach(s => {
+        if (s.slice_id && s.isolation_confidence !== null) {
+          updateConf(s.slice_id, s.isolation_confidence);
+        }
+      });
+    } catch (_) { /* silently skip — API may be momentarily busy */ }
+  }
+
+  // ── Poll /demo/status for breach state ────────────────────────────────────
+  async function pollStatus() {
+    try {
+      const r = await fetch(`${API}/demo/status`, { signal: AbortSignal.timeout(3000) });
+      if (!r.ok) return;
+      const data = await r.json();
+      breachActive = data.breach_active;
+
+      const dot   = document.getElementById('statusDot');
+      const label = document.getElementById('statusLabel');
+      const sub   = document.getElementById('statusSub');
+
+      const elapsed = injectTime ? (Date.now() - injectTime) / 1000 : 0;
+
+      if (breachActive) {
+        dot.className    = 'status-dot breach';
+        label.textContent = '⚠️  ISOLATION BREACH ACTIVE';
+        sub.textContent  = `Cross-slice traffic injected · ${Math.round(elapsed)}s elapsed`;
+        updateTimeline(elapsed);
+      } else {
+        dot.className    = 'status-dot normal';
+        label.textContent = '✅  All slices isolated normally';
+        sub.textContent  = 'Monitoring active · ML scoring live';
+        if (injectTime && elapsed < 5) {
+          // Just restored — show recovery timeline
+          updateTimeline(999);
+        } else {
+          updateTimeline(0);
+        }
+      }
+
+      document.getElementById('btnInject').disabled  = breachActive;
+      document.getElementById('btnRestore').disabled = !breachActive;
+
+    } catch (e) {
+      document.getElementById('statusLabel').textContent = '⚡ API unreachable';
+      document.getElementById('statusSub').textContent   = 'Check that docker compose is running';
+      document.getElementById('statusDot').className     = 'status-dot loading';
+    }
+  }
+
+  // ── Inject breach ──────────────────────────────────────────────────────────
+  async function triggerInject() {
+    document.getElementById('btnInject').disabled = true;
+    showToast('Sending breach injection command…', 'info');
+    try {
+      const r = await fetch(`${API}/demo/inject`, { method: 'POST' });
+      const d = await r.json();
+      if (d.status === 'injected') {
+        injectTime = Date.now();
+        showToast('✅ Breach injected! Watch the dashboard gauge drop in ~15 seconds.', 'success');
+      } else if (d.status === 'already_active') {
+        showToast('⚠️ Breach already active. Tap RESTORE first.', 'error');
+        document.getElementById('btnInject').disabled = false;
+      } else {
+        showToast(`Response: ${d.message}`, 'info');
+      }
+    } catch (e) {
+      showToast(`❌ Connection error: ${e.message}`, 'error');
+      document.getElementById('btnInject').disabled = false;
+    }
+  }
+
+  // ── Restore isolation ──────────────────────────────────────────────────────
+  async function triggerRestore() {
+    document.getElementById('btnRestore').disabled = true;
+    showToast('Sending restore command…', 'info');
+    try {
+      const r = await fetch(`${API}/demo/restore`, { method: 'POST' });
+      const d = await r.json();
+      showToast('✅ Isolation restoring. Confidence will recover in 30–60 seconds.', 'success');
+    } catch (e) {
+      showToast(`❌ Connection error: ${e.message}`, 'error');
+    }
+  }
+
+  // ── CPU stress (bonus scenario) ────────────────────────────────────────────
+  async function triggerCpuStress() {
+    showToast('Triggering CPU stress on slice-a…', 'info');
+    try {
+      const r = await fetch(`${API}/demo/stress`, { method: 'POST' });
+      if (r.ok) {
+        showToast('🔥 CPU stress started on slice-a. Watch CPU% on dashboard.', 'success');
+      } else {
+        showToast('CPU stress endpoint not available — add /demo/stress to api/main.py', 'error');
+      }
+    } catch (e) {
+      showToast('CPU stress endpoint not yet implemented (see docs §7.1 bonus)', 'error');
+    }
+  }
+
+  // ── Start polling ──────────────────────────────────────────────────────────
+  pollStatus();
+  pollScores();
+  setInterval(pollStatus, POLL_INTERVAL_MS);
+  setInterval(pollScores, POLL_INTERVAL_MS);
+</script>
+
+</body>
+</html>
