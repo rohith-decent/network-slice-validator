@@ -37,57 +37,207 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .main { background-color: #0d1117; }
-    .block-container { padding-top: 1rem; }
+    /* ── Base ── */
+    .main { background-color: #050b14; }
+    .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
+
+    /* ── Metric cards — high-contrast bordered boxes ── */
     .stMetric {
-        background: #161b22;
-        border-radius: 8px;
-        padding: 12px;
-        border: 1px solid #30363d;
+        background: #0a1628;
+        border: 1px solid #00d4ff33;
+        border-radius: 10px;
+        padding: 14px 16px;
+        box-shadow: 0 0 12px #00d4ff18;
     }
     .stMetric label {
-        color: #8b949e !important;
-        font-size: 0.75rem !important;
+        color: #7ecfff !important;
+        font-size: 0.72rem !important;
+        font-weight: 700 !important;
         text-transform: uppercase;
+        letter-spacing: 0.08em;
     }
+    .stMetric [data-testid="stMetricValue"] {
+        color: #e8f4fd !important;
+        font-size: 1.4rem !important;
+        font-weight: 700 !important;
+    }
+    .stMetric [data-testid="stMetricDelta"] {
+        font-size:0.75rem !important;
+    }
+
+    /* ── Section card wrapper ── */
+    .cyber-card {
+        background: #0a1628;
+        border: 1px solid #00d4ff22;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 16px;
+        box-shadow: 0 0 20px #00d4ff10;
+    }
+
+    /* ── Alert feed cards ── */
     .alert-card {
-        background: #2d1117;
+        background: #1a0a0a;
+        border: 1px solid #f8514966;
         border-left: 4px solid #f85149;
-        border-radius: 4px;
-        padding: 8px 12px;
-        margin: 4px 0;
+        border-radius: 6px;
+        padding: 10px 14px;
+        margin: 5px 0;
         font-size: 0.85rem;
-        color: #f0f6fc;
+        color: #ffdcdc;
     }
     .normal-card {
-        background: #0d1a0d;
+        background: #051a0a;
+        border: 1px solid #3fb95066;
         border-left: 4px solid #3fb950;
-        border-radius: 4px;
-        padding: 8px 12px;
-        margin: 4px 0;
-        font-size: 0.85rem;
-        color: #f0f6fc;
-    }
-    .incident-open {
-        background: #2d1117;
-        border-left: 4px solid #f85149;
         border-radius: 6px;
         padding: 10px 14px;
+        margin: 5px 0;
+        font-size: 0.85rem;
+        color: #d4f7d4;
+    }
+
+    /* ── Incident cards ── */
+    .incident-open {
+        background: #1a0a0a;
+        border: 1px solid #f85149aa;
+        border-left: 4px solid #f85149;
+        border-radius: 8px;
+        padding: 12px 16px;
         margin: 6px 0;
         font-size: 0.88rem;
-        color: #f0f6fc;
+        color: #ffdcdc;
     }
     .incident-closed {
-        background: #161b22;
+        background: #0a1628;
+        border: 1px solid #30363d;
         border-left: 4px solid #3fb950;
-        border-radius: 6px;
-        padding: 10px 14px;
+        border-radius: 8px;
+        padding: 12px 16px;
         margin: 6px 0;
         font-size: 0.88rem;
-        color: #8b949e;
+        color: #8bb8c8;
     }
-    h1 { color: #58a6ff !important; }
-    h2, h3 { color: #c9d1d9 !important; }
+
+    /* ── Page title ── */
+    h1 {
+        color: #00d4ff !important;
+        font-family: 'Courier New', monospace !important;
+        font-size: 1.8rem !important;
+        letter-spacing: 0.04em;
+        text-shadow: 0 0 20px #00d4ff66;
+    }
+    h2, h3 {
+        color: #7ecfff !important;
+        font-family: 'Courier New', monospace !important;
+        letter-spacing: 0.02em;
+    }
+
+    /* ── Sidebar ── */
+    section[data-testid="stSidebar"] {
+        background: #020810 !important;
+        border-right: 1px solid #00d4ff22;
+    }
+    section[data-testid="stSidebar"] .stMarkdown p,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] .stRadio label {
+        color: #a8d8ea !important;
+        font-size: 0.85rem;
+    }
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        color: #00d4ff !important;
+        font-size: 1rem !important;
+        text-shadow: 0 0 10px #00d4ff55;
+    }
+
+    /* ── Dataframe / table ── */
+    .stDataFrame {
+        border: 1px solid #00d4ff22 !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stDataFrameResizable"] th {
+        background: #0a1628 !important;
+        color: #7ecfff !important;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    [data-testid="stDataFrameResizable"] td {
+        color: #c8ddf0 !important;
+        font-size: 0.82rem;
+    }
+
+    /* ── Buttons ── */
+    .stButton > button {
+        background: #0a1628 !important;
+        color: #00d4ff !important;
+        border: 1px solid #00d4ff55 !important;
+        border-radius: 6px !important;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        transition: all 0.2s;
+    }
+    .stButton > button:hover {
+        background: #00d4ff15 !important;
+        border-color: #00d4ff !important;
+        box-shadow: 0 0 12px #00d4ff44;
+    }
+    .stButton > button[kind="primary"] {
+        background: #1a0030 !important;
+        color: #bf80ff !important;
+        border-color: #7c3aed88 !important;
+    }
+
+    /* ── Expander ── */
+    .streamlit-expanderHeader {
+        background: #0a1628 !important;
+        border: 1px solid #00d4ff22 !important;
+        border-radius: 8px !important;
+        color: #a8d8ea !important;
+    }
+    .streamlit-expanderContent {
+        background: #050b14 !important;
+        border: 1px solid #00d4ff15 !important;
+        border-top: none !important;
+    }
+
+    /* ── Selectbox / Slider labels ── */
+    .stSelectbox label, .stSlider label, .stMultiSelect label, .stCheckbox label {
+        color: #7ecfff !important;
+        font-size: 0.78rem !important;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    /* ── Caption / sub-text ── */
+    .stCaption, .stMarkdown small {
+        color: #5a7a8a !important;
+    }
+
+    /* ── Divider ── */
+    hr {
+        border-color: #00d4ff18 !important;
+    }
+
+    /* ── Code block ── */
+    .stCode {
+        background: #020810 !important;
+        border: 1px solid #00d4ff22 !important;
+        border-radius: 6px !important;
+    }
+    .stCode code {
+        color: #3fb950 !important;
+        font-size: 0.78rem !important;
+    }
+
+    /* ── Info / warning boxes ── */
+    .stAlert {
+        border-radius: 8px !important;
+        border-left-width: 4px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -217,42 +367,49 @@ def confidence_color(val: float | None) -> str:
 def make_gauge(title: str, value: float | None) -> go.Figure:
     display_val = value if value is not None else 0
     color = confidence_color(value)
+
     fig = go.Figure(go.Indicator(
         mode="gauge+number+delta",
         value=display_val,
-        title={"text": title, "font": {"size": 14, "color": "#c9d1d9"}},
-        number={"suffix": "%", "font": {"size": 24, "color": color}},
+        title={"text": title, "font": {"size": 13, "color": "#7ecfff", "family": "Segoe UI"}},
+        number={"suffix": "%", "font": {"size": 28, "color": color, "family": "Segoe UI"}, "valueformat": ".1f"},
         delta={
             "reference": 70,
             "increasing": {"color": "#3fb950"},
             "decreasing": {"color": "#f85149"},
+            "font": {"size": 12},
         },
         gauge={
-            "axis": {"range": [0, 100], "tickcolor": "#30363d", "tickfont": {"color": "#8b949e"}},
-            "bar": {"color": color, "thickness": 0.3},
-            "bgcolor": "#161b22",
-            "bordercolor": "#30363d",
-            "borderwidth": 1,
+            "axis": {
+                "range": [0, 100],
+                "tickcolor": "#3a5a6a",
+                "tickfont": {"color": "#7ecfff", "size": 10},
+                "tickwidth": 1,
+                "dtick": 20,
+            },
+            "bar": {"color": color, "thickness": 0.38},
+            "bgcolor": "#020810",
+            "bordercolor": "#00d4ff",  # ✅ Fixed: 6-digit hex only (no alpha)
+            "borderwidth": 2,
             "steps": [
-                {"range": [0, 40],   "color": "#2d1117"},
-                {"range": [40, 70],  "color": "#1a1500"},
-                {"range": [70, 100], "color": "#0d1a0d"},
+                {"range": [0, 40],    "color": "#1a0505"},
+                {"range": [40, 70],   "color": "#1a1100"},
+                {"range": [70, 100],  "color": "#051a08"},
             ],
             "threshold": {
-                "line": {"color": "#f85149", "width": 2},
-                "thickness": 0.8,
+                "line": {"color": "#f85149", "width": 3},
+                "thickness": 0.85,
                 "value": 40,
             },
         },
     ))
     fig.update_layout(
-        paper_bgcolor="#0d1117",
-        plot_bgcolor="#0d1117",
-        height=220,
-        margin=dict(t=40, b=10, l=20, r=20),
+        paper_bgcolor="#050b14",
+        plot_bgcolor="#050b14",
+        height=230,
+        margin=dict(t=40, b=10, l=30, r=30),
     )
     return fig
-
 
 # ── Timeline chart ─────────────────────────────────────────────────────────────
 
@@ -261,37 +418,89 @@ def make_timeline(dfs: dict[str, pd.DataFrame]) -> go.Figure:
         rows=3, cols=1,
         shared_xaxes=True,
         subplot_titles=("CPU %", "Memory (MB)", "Network RX KB"),
-        vertical_spacing=0.08,
+        vertical_spacing=0.1,
     )
-    colors = {"slice-a": "#58a6ff", "slice-b": "#f78166"}
+
+    colors = {"slice-a": "#00d4ff", "slice-b": "#f78166"}
+    # ✅ fillcolor SUPPORTS rgba/alpha - this is the ONLY place alpha works
+    fill_colors = {"slice-a": "rgba(0,212,255,0.08)", "slice-b": "rgba(247,129,102,0.08)"}
+
     for slice_id, df in dfs.items():
         if df.empty:
             continue
         c = colors.get(slice_id, "#8b949e")
-        fig.add_trace(go.Scatter(x=df["timestamp"], y=df["cpu_pct"],
-            name=f"{slice_id} CPU", line=dict(color=c, width=1.5)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df["timestamp"], y=df["mem_mb"],
-            name=f"{slice_id} MEM", line=dict(color=c, width=1.5, dash="dot")), row=2, col=1)
-        fig.add_trace(go.Scatter(x=df["timestamp"], y=df["net_rx_kb"],
-            name=f"{slice_id} RX", line=dict(color=c, width=1.5, dash="dash")), row=3, col=1)
+        fc = fill_colors.get(slice_id, "rgba(255,255,255,0.05)")
+
+        # CPU — filled area
+        fig.add_trace(go.Scatter(
+            x=df["timestamp"], y=df["cpu_pct"],
+            name=f"{slice_id} CPU",
+            line=dict(color=c, width=2),
+            fill="tozeroy", fillcolor=fc,  # ✅ fillcolor supports alpha
+            mode="lines",
+        ), row=1, col=1)
+
+        # Memory — dashed line with fill
+        fig.add_trace(go.Scatter(
+            x=df["timestamp"], y=df["mem_mb"],
+            name=f"{slice_id} MEM",
+            line=dict(color=c, width=2, dash="dot"),
+            fill="tozeroy", fillcolor=fc,
+            mode="lines",
+        ), row=2, col=1)
+
+        # Network — dashed
+        fig.add_trace(go.Scatter(
+            x=df["timestamp"], y=df["net_rx_kb"],
+            name=f"{slice_id} RX",
+            line=dict(color=c, width=2, dash="dash"),
+            fill="tozeroy", fillcolor=fc,
+            mode="lines",
+        ), row=3, col=1)
+
+        # Anomaly markers
         if "anomaly_score" in df.columns and df["anomaly_score"].notna().any():
             anomalies = df[df["anomaly_score"] < 0]
             if not anomalies.empty:
                 fig.add_trace(go.Scatter(
                     x=anomalies["timestamp"], y=anomalies["cpu_pct"],
                     mode="markers",
-                    marker=dict(color="#f85149", size=8, symbol="x"),
-                    name=f"{slice_id} anomaly",
+                    marker=dict(color="#f85149", size=10, symbol="x",
+                                line=dict(width=2, color="#ff0000")),
+                    name=f"{slice_id} ⚠ anomaly",
                 ), row=1, col=1)
+
+    # ✅ All colors here are 6-digit hex only
+    axis_style = dict(
+        gridcolor="#0f2030",
+        zerolinecolor="#0f2030",
+        linecolor="#00d4ff",  # ✅ Fixed: 6-digit hex
+        tickfont=dict(color="#7ecfff", size=10),
+        title_font=dict(color="#7ecfff"),
+    )
+
     fig.update_layout(
-        paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
-        font=dict(color="#8b949e", size=11),
-        legend=dict(bgcolor="#161b22", bordercolor="#30363d", font=dict(size=10)),
-        height=420, margin=dict(t=40, b=20, l=40, r=20),
+        paper_bgcolor="#050b14",
+        plot_bgcolor="#050b14",
+        font=dict(color="#7ecfff", size=11, family="Segoe UI"),
+        legend=dict(
+            bgcolor="#0a1628",
+            bordercolor="#00d4ff",  # ✅ Fixed: 6-digit hex only
+            borderwidth=1,
+            font=dict(size=10, color="#a8d8ea"),
+        ),
+        height=450,
+        margin=dict(t=50, b=20, l=50, r=20),
     )
     for i in range(1, 4):
-        fig.update_yaxes(gridcolor="#21262d", zerolinecolor="#21262d", row=i, col=1)
-        fig.update_xaxes(gridcolor="#21262d", row=i, col=1)
+        fig.update_yaxes(**axis_style, row=i, col=1)
+        fig.update_xaxes(**axis_style, row=i, col=1)
+
+    # Subplot title color
+    for annotation in fig.layout.annotations:
+        annotation.font.color = "#7ecfff"
+        annotation.font.family = "Segoe UI"
+
     return fig
 
 
@@ -605,46 +814,52 @@ def page_anomaly_classifier(selected_slices: list[str]):
     }
 
     if not df_anomalies.empty and "attack_type" in df_anomalies.columns:
-        for attack_type, group in df_anomalies.groupby("attack_type"):
-            with st.expander(f"{_badge_html(attack_type)} &nbsp; {len(group)} events", expanded=True):
-                st.markdown("", unsafe_allow_html=True)
+            for attack_type, group in df_anomalies.groupby("attack_type"):
+                st.markdown(
+            f'<div class="cyber-card" style="padding:12px 16px; margin-bottom:8px">'
+            f'{_badge_html(attack_type)}&nbsp;&nbsp;'
+            f'<strong style="color:#e8f4fd">{len(group)} events</strong></div>',
+            unsafe_allow_html=True
+        )
+                with st.container():
+                    st.markdown('<div style="padding-left:12px; border-left:2px solid #00d4ff33; margin-bottom:12px">', unsafe_allow_html=True)
 
-                ac1, ac2, ac3, ac4 = st.columns(4)
-                ac1.metric("Avg CPU %",    f"{group['cpu_pct'].mean():.1f}%",
-                           delta=f"+{group['cpu_pct'].mean() - normal_avg['cpu_pct']:.1f}% vs normal",
-                           delta_color="inverse")
-                ac2.metric("Avg Mem MB",   f"{group['mem_mb'].mean():.1f}",
-                           delta=f"+{group['mem_mb'].mean() - normal_avg['mem_mb']:.1f} vs normal",
-                           delta_color="inverse")
-                ac3.metric("Avg RX KB/s",  f"{group['net_rx_kb'].mean():.2f}",
-                           delta=f"+{group['net_rx_kb'].mean() - normal_avg['net_rx_kb']:.2f} vs normal",
-                           delta_color="inverse")
-                ac4.metric("Avg TX KB/s",  f"{group['net_tx_kb'].mean():.2f}",
-                           delta=f"+{group['net_tx_kb'].mean() - normal_avg['net_tx_kb']:.2f} vs normal",
-                           delta_color="inverse")
+                    ac1, ac2, ac3, ac4 = st.columns(4)
+                    ac1.metric("Avg CPU %", f"{group['cpu_pct'].mean():.1f}%",
+                       delta=f"+{group['cpu_pct'].mean() - normal_avg['cpu_pct']:.1f}% vs normal",
+                       delta_color="inverse")
+                    ac2.metric("Avg Mem MB", f"{group['mem_mb'].mean():.1f}",
+                       delta=f"+{group['mem_mb'].mean() - normal_avg['mem_mb']:.1f} vs normal",
+                       delta_color="inverse")
+                    ac3.metric("Avg RX KB/s", f"{group['net_rx_kb'].mean():.2f}",
+                       delta=f"+{group['net_rx_kb'].mean() - normal_avg['net_rx_kb']:.2f} vs normal",
+                       delta_color="inverse")
+                    ac4.metric("Avg TX KB/s", f"{group['net_tx_kb'].mean():.2f}",
+                       delta=f"+{group['net_tx_kb'].mean() - normal_avg['net_tx_kb']:.2f} vs normal",
+                       delta_color="inverse")
 
-                # Mini radar-style feature bar chart
-                features   = ["cpu_pct", "mem_mb", "net_rx_kb", "net_tx_kb"]
-                labels     = ["CPU %", "Mem MB", "RX KB/s", "TX KB/s"]
-                atk_vals   = [group[f].mean() for f in features]
-                norm_vals  = [normal_avg[f] for f in features]
+                    features = ["cpu_pct", "mem_mb", "net_rx_kb", "net_tx_kb"]
+                    labels = ["CPU %", "Mem MB", "RX KB/s", "TX KB/s"]
+                    atk_vals = [group[f].mean() for f in features]
+                    norm_vals = [normal_avg[f] for f in features]
 
-                fig_feat = go.Figure()
-                fig_feat.add_trace(go.Bar(name="During Attack", x=labels, y=atk_vals,
-                                          marker_color="#f85149", opacity=0.85))
-                fig_feat.add_trace(go.Bar(name="Normal Baseline", x=labels, y=norm_vals,
-                                          marker_color="#3fb950", opacity=0.65))
-                fig_feat.update_layout(
-                    barmode="group", paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
-                    font=dict(color="#c9d1d9", size=11),
-                    height=220, margin=dict(t=20, b=20, l=20, r=20),
-                    legend=dict(bgcolor="#161b22", font=dict(size=10)),
-                    xaxis=dict(gridcolor="#21262d"),
-                    yaxis=dict(gridcolor="#21262d"),
-                )
-                st.plotly_chart(fig_feat, use_container_width=True)
+                    fig_feat = go.Figure()
+                    fig_feat.add_trace(go.Bar(name="During Attack", x=labels, y=atk_vals,
+                                      marker_color="#f85149", opacity=0.85))
+                    fig_feat.add_trace(go.Bar(name="Normal Baseline", x=labels, y=norm_vals,
+                                      marker_color="#3fb950", opacity=0.65))
+                    fig_feat.update_layout(
+                        barmode="group", paper_bgcolor="#050b14", plot_bgcolor="#050b14",
+                        font=dict(color="#c9d1d9", size=11),
+                        height=220, margin=dict(t=20, b=20, l=20, r=20),
+                        legend=dict(bgcolor="#161b22", font=dict(size=10)),
+                        xaxis=dict(gridcolor="#21262d"),
+                        yaxis=dict(gridcolor="#21262d"),
+                    )
+                    st.plotly_chart(fig_feat, use_container_width=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
     else:
-        st.info("No classified anomalies yet. Inject an attack from the sidebar to see classification.")
+        st.info("No classified anomalies yet. Inject an attack from the sidebar.")
 
     st.divider()
 
