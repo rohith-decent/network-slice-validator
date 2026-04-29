@@ -18,7 +18,7 @@ RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /
     && rm -rf /var/lib/apt/lists/*
 
 # ── App directories ───────────────────────────────────────────────
-RUN mkdir -p /app /data /ml /app/collector /app/ml /app/api /app/dashboard
+RUN mkdir -p /app /data /ml /app/collector /app/ml /app/api /app/dashboard /app/supabase
 WORKDIR /app
 
 # ── Python dependencies ───────────────────────────────────────────
@@ -26,15 +26,16 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ── Source code ───────────────────────────────────────────────────
-COPY collector/ /app/collector/
-COPY ml/        /app/ml/
-COPY api/       /app/api/
-COPY dashboard/ /app/dashboard/
+COPY collector/  /app/collector/
+COPY ml/         /app/ml/
+COPY api/        /app/api/
+COPY dashboard/  /app/dashboard/
+COPY sb/   /app/sb/
 COPY entrypoint.sh /app/entrypoint.sh
 
 RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
-# ── Environment (Section 11) ──────────────────────────────────────
+# ── Environment ───────────────────────────────────────────────────
 ENV PYTHONPATH=/app
 ENV DB_PATH=/data/metrics.db
 ENV MODEL_PATH=/ml/model.pkl
