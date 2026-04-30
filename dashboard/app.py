@@ -111,7 +111,7 @@ st.markdown("""
 
 # ── API helpers ────────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=REFRESH_S)
+@st.cache_data(ttl=REFRESH_S, show_spinner=False)
 def fetch_scores() -> list[dict]:
     try:
         r = requests.get(f"{API_BASE}/score", timeout=3)
@@ -122,7 +122,25 @@ def fetch_scores() -> list[dict]:
         return []
 
 
-@st.cache_data(ttl=REFRESH_S)
+def get_scores_with_fallback() -> dict:
+    """
+    Fetch latest scores and merge with last-known-good values stored in
+    session state. This prevents un-injected slices from dropping to 0
+    when the API is momentarily slow or a fetch returns partial data.
+    """
+    if "last_good_scores" not in st.session_state:
+        st.session_state["last_good_scores"] = {}
+
+    fresh = fetch_scores()
+    for s in fresh:
+        sid = s.get("slice_id")
+        if sid and s.get("isolation_confidence") is not None:
+            st.session_state["last_good_scores"][sid] = s
+
+    return st.session_state["last_good_scores"]
+
+
+@st.cache_data(ttl=REFRESH_S, show_spinner=False)
 def fetch_history(slice_id: str, limit: int = 120) -> pd.DataFrame:
     try:
         r = requests.get(
@@ -141,7 +159,7 @@ def fetch_history(slice_id: str, limit: int = 120) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=10, show_spinner=False)
 def fetch_health() -> dict:
     try:
         r = requests.get(f"{API_BASE}/health", timeout=2)
@@ -151,7 +169,7 @@ def fetch_health() -> dict:
         return {"status": "unreachable", "model_loaded": False, "db_rows": 0}
 
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=5, show_spinner=False)
 def fetch_incidents(limit: int = 100) -> list[dict]:
     try:
         r = requests.get(f"{API_BASE}/incidents", params={"limit": limit}, timeout=3)
@@ -161,7 +179,7 @@ def fetch_incidents(limit: int = 100) -> list[dict]:
         return []
 
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=5, show_spinner=False)
 def fetch_audit_log(
     slice_id: Optional[str] = None,
     limit: int = 200,
@@ -182,7 +200,7 @@ def fetch_audit_log(
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=30, show_spinner=False)
 def fetch_sla(slice_id: str, window: str) -> dict:
     try:
         r = requests.get(
@@ -196,7 +214,7 @@ def fetch_sla(slice_id: str, window: str) -> dict:
         return {"compliance": 100.0, "total": 0, "anomalous": 0}
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=30, show_spinner=False)
 def fetch_model_status() -> dict:
     try:
         r = requests.get(f"{API_BASE}/model/status", timeout=3)
@@ -847,8 +865,7 @@ def page_live_monitor(refresh_rate: int, history_len: int, selected_slices: list
         f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
 
-    scores    = fetch_scores()
-    score_map = {s["slice_id"]: s for s in scores if "slice_id" in s}
+    score_map = get_scores_with_fallback()
     dfs: dict[str, pd.DataFrame] = {
         name: fetch_history(name, limit=history_len) for name in selected_slices
     }
@@ -993,10 +1010,13 @@ def page_anomaly_classifier(selected_slices: list[str]):
 
     if not df_anomalies.empty and "attack_type" in df_anomalies.columns:
         for attack_type, group in df_anomalies.groupby("attack_type"):
+            icon = ATTACK_BADGE.get(attack_type, ("⚠️", "#374151", attack_type))[0]
             with st.expander(
-                f"{_badge_html(attack_type)} &nbsp; {len(group)} events", expanded=True
+                f"{icon} {attack_type}  —  {len(group)} events", expanded=True
             ):
-                st.markdown("", unsafe_allow_html=True)
+                st.markdown(
+                    f"{_badge_html(attack_type)}", unsafe_allow_html=True
+                )
                 ac1, ac2, ac3, ac4 = st.columns(4)
                 ac1.metric("Avg CPU %",   f"{group['cpu_pct'].mean():.1f}%",
                            delta=f"+{group['cpu_pct'].mean() - normal_avg['cpu_pct']:.1f}% vs normal",
@@ -1238,8 +1258,14 @@ def page_sla_model_health(selected_slices: list[str]):
                 f"samples: {last.get('n_samples', '?')}"
             )
         if st.button("🔄 Reload Model Now", type="secondary"):
-            r = requests.post(f"{API_BASE}/reload-model", timeout=5)
-            st.success("Model reloaded.") if r.ok else st.error("Reload failed.")
+            try:
+                r = requests.post(f"{API_BASE}/reload-model", timeout=5)
+                if r.ok:
+                    st.success("Model reloaded.")
+                else:
+                    st.error("Reload failed.")
+            except Exception as exc:
+                st.error(f"Could not reach API: {exc}")
     else:
         st.info("Model status unavailable — API may still be starting.")
 
@@ -1253,15 +1279,14 @@ def main():
 
     if page == "🛡️ Live Monitor":
         page_live_monitor(refresh_rate, history_len, selected_slices)
+        time.sleep(refresh_rate)
+        st.rerun()
     elif page == "🔍 Anomaly Classifier":
         page_anomaly_classifier(selected_slices)
     elif page == "📋 Audit & Incident Log":
         page_audit_log(selected_slices)
     elif page == "📊 SLA & Model Health":
         page_sla_model_health(selected_slices)
-
-    time.sleep(refresh_rate)
-    st.rerun()
 
 
 if __name__ == "__main__":

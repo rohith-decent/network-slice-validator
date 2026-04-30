@@ -151,7 +151,7 @@ PYEOF
 
         if [ "$DRIFT_FLAG" = "1" ]; then
             echo "[watchdog] drift_flag=1 — retraining from Supabase..."
-            python /app/ml/train.py --source supabase --reason drift_detected \
+            RETRAIN_REASON=drift_detected python /app/ml/train.py --source supabase --reason drift_detected \
                 && echo "[watchdog] Retrain complete." \
                 || echo "[watchdog] WARNING: retrain failed, keeping existing model."
 

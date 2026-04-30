@@ -111,12 +111,23 @@ def _sb_push_metric(row: dict) -> None:
         log.debug("Supabase metric push skipped: %s", exc)
 
 
-def _sb_open_incident(record: dict) -> None:
+def _sb_open_incident(record: dict) -> dict | None:
+    """Insert a new incident in Supabase and return the created row (or None)."""
     try:
         from sb.incidents import open_incident
-        open_incident(record)
+        return open_incident(record)
     except Exception as exc:
         log.debug("Supabase open_incident skipped: %s", exc)
+        return None
+
+
+def _sb_get_active_incident(slice_id: str) -> dict | None:
+    """Return the currently open Supabase incident for a slice, or None."""
+    try:
+        from sb.incidents import fetch_active_incident
+        return fetch_active_incident(slice_id)
+    except Exception:
+        return None
 
 
 def _sb_close_incident(slice_id: str, resolved_at: str, duration_s: float) -> None:
@@ -151,6 +162,22 @@ def _sb_fetch_retrain_log(limit: int = 1) -> list[dict]:
         return fetch_retrain_log(limit) or []
     except Exception:
         return []
+
+
+def _sb_log_retrain(reason: str, n_samples: int, slice_ids: list[str]) -> None:
+    """Write one row to model_retrain_log in Supabase. Never raises."""
+    import json
+    try:
+        from sb.retrain import log_retrain
+        log_retrain({
+            "retrained_at": _dt.datetime.utcnow().isoformat(),
+            "reason":       reason,
+            "n_samples":    n_samples,
+            "slice_ids":    json.dumps(slice_ids),
+        })
+        log.info("[sb.retrain] Logged retrain event: reason=%s slices=%s", reason, slice_ids)
+    except Exception as exc:
+        log.debug("Supabase log_retrain skipped: %s", exc)
 
 
 # ── Attack classifier ─────────────────────────────────────────────────────────
@@ -278,15 +305,18 @@ def _correlate_slice(conn: sqlite3.Connection, slice_id: str):
         except Exception as exc:
             log.debug("Correlator email alert skipped: %s", exc)
 
-        _sb_open_incident({
-            "slice_id":       slice_id,
-            "attack_type":    attack_type,
-            "started_at":     _dt.datetime.utcfromtimestamp(
-                                  first["timestamp"]).isoformat(),
-            "peak_score":     peak,
-            "min_confidence": min_conf,
-            "is_active":      True,
-        })
+        # Only open a Supabase incident if one isn't already active
+        # (the inject-attack path opens one immediately on button press)
+        if not _sb_get_active_incident(slice_id):
+            _sb_open_incident({
+                "slice_id":       slice_id,
+                "attack_type":    attack_type,
+                "started_at":     _dt.datetime.utcfromtimestamp(
+                                      first["timestamp"]).isoformat(),
+                "peak_score":     peak,
+                "min_confidence": min_conf,
+                "is_active":      True,
+            })
 
     elif not is_breaching and active:
         now      = time.time()
@@ -437,9 +467,11 @@ async def _run_injection(slice_id: str, attack_type: str, duration_s: int = 60):
                 "sampled_at":  _dt.datetime.utcfromtimestamp(ts).isoformat(),
             })
 
-            # Send email alert only on the first injected row
+            # Send email alert + open Supabase incident + log retrain — first row only
             if first_row:
                 first_row = False
+
+                # 1. Email alert
                 try:
                     from sb.email_alert import send_attack_alert
                     send_attack_alert(
@@ -450,6 +482,31 @@ async def _run_injection(slice_id: str, attack_type: str, duration_s: int = 60):
                     )
                 except Exception as exc:
                     log.debug("Email alert skipped: %s", exc)
+
+                # 2. Immediately open a Supabase incident (don't wait for correlator)
+                existing = _sb_get_active_incident(slice_id)
+                if not existing:
+                    _sb_open_incident({
+                        "slice_id":       slice_id,
+                        "attack_type":    classified_at,
+                        "started_at":     _dt.datetime.utcfromtimestamp(ts).isoformat(),
+                        "peak_score":     anomaly_score if anomaly_score is not None else -0.5,
+                        "min_confidence": confidence,
+                        "is_active":      True,
+                    })
+                    log.info("[inject] Supabase incident opened: slice=%s type=%s",
+                             slice_id, classified_at)
+
+                # 3. Log a model_retrain_log row so the audit trail records
+                #    which slices were active when this attack injection started.
+                with _bundle_lock:
+                    _b = dict(_bundle)
+                n_samples = _b.get("n_samples", 0)
+                _sb_log_retrain(
+                    reason=f"attack_injection:{classified_at}",
+                    n_samples=n_samples,
+                    slice_ids=[slice_id],
+                )
 
             await asyncio.sleep(5)
     except asyncio.CancelledError:
