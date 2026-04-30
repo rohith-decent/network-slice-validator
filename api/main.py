@@ -41,7 +41,8 @@ from typing import Optional
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
-from fastapi import Request, Query
+from fastapi import Request, Query, Body
+from pydantic import BaseModel
 import collections
 import requests as _req
 
@@ -62,6 +63,9 @@ FEATURE_NAMES = ["cpu_pct", "mem_mb", "net_rx_kb", "net_tx_kb"]
 COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT_NAME", "network-slice-validator")
 BREACH_NETWORK  = f"{COMPOSE_PROJECT}_slice_b_net"
 _breach_active: bool = False
+
+class InjectRequest(BaseModel):
+    slice_id: str = "slice-a"   # defaults to slice-a for backward compat
 
 # ── Global model bundle ───────────────────────────────────────────────────────
 
@@ -314,11 +318,14 @@ def _correlate_slice(conn: sqlite3.Connection, slice_id: str):
                 (slice_id,)
             ).fetchone()
             features_dict = dict(last_row) if last_row else {}
+            # Determine the public-facing host for the restore link
+            host = os.environ.get("PUBLIC_API_HOST", "http://localhost:8000")
             send_attack_alert(
                 slice_id=slice_id,
                 attack_type=attack_type,
                 confidence=min_conf,
                 features=features_dict,
+                restore_url=f"{host}/restore",
             )
         except Exception as exc:
             log.debug("Correlator email alert skipped: %s", exc)
@@ -565,12 +572,20 @@ def _run_cmd(cmd: list, timeout: int = 15) -> tuple[bool, str]:
     except Exception as e:
         return False, str(e)
 
-def _do_inject_breach():
+def _do_inject_breach(target_slice: str = "slice-a"):
     global _breach_active
-    log.info("[demo] Injecting breach → %s", BREACH_NETWORK)
-    _run_cmd(["docker", "network", "connect", BREACH_NETWORK, "slice-a"])
-    _run_cmd(["docker", "exec", "-d", "slice-b", "iperf3", "-s"])
-    _run_cmd(["docker", "exec", "-d", "slice-a", "iperf3", "-c", "slice-b", "-t", "30", "-b", "5M"])
+    # Determine attacker and victim based on target slice
+    if target_slice == "slice-b":
+        attacker, victim = "slice-b", "slice-a"
+        breach_net = f"{COMPOSE_PROJECT}_slice_a_net"
+    else:
+        attacker, victim = "slice-a", "slice-b"
+        breach_net = BREACH_NETWORK  # slice_b_net
+
+    log.info("[demo] Injecting breach: %s → %s via %s", attacker, victim, breach_net)
+    _run_cmd(["docker", "network", "connect", breach_net, attacker])
+    _run_cmd(["docker", "exec", "-d", victim, "iperf3", "-s"])
+    _run_cmd(["docker", "exec", "-d", attacker, "iperf3", "-c", victim, "-t", "30", "-b", "5M"])
     _breach_active = True
 
     # ── Signal agents ──
@@ -848,12 +863,22 @@ def demo_page():
     with open(html_path, "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
+@app.get("/restore", response_class=HTMLResponse)
+def restore_page():
+    html_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "dashboard", "restore.html")
+    )
+    if not os.path.exists(html_path):
+        return HTMLResponse("<h1>restore.html not found</h1>", status_code=404)
+    with open(html_path, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
 @app.post("/demo/inject")
-def inject_breach(background_tasks: BackgroundTasks):
+def inject_breach(background_tasks: BackgroundTasks, body: InjectRequest = Body(default=InjectRequest())):
     if _breach_active:
         return {"status": "already_active", "breach_active": True}
-    background_tasks.add_task(_do_inject_breach)
-    return {"status": "injected", "message": "Breach started. Watch dashboard in ~15s.", "breach_active": True}
+    background_tasks.add_task(_do_inject_breach, body.slice_id)
+    return {"status": "injected", "message": f"Breach started on {body.slice_id}. Watch dashboard in ~15s.", "breach_active": True}
 
 @app.post("/demo/restore")
 def restore_isolation(background_tasks: BackgroundTasks):

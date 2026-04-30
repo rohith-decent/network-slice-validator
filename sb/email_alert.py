@@ -39,7 +39,7 @@ _DEFAULT_COLOUR = "#718096"            # grey for unknown
 
 
 def _build_html(slice_id: str, attack_type: str | None,
-                confidence: float, features: dict) -> str:
+                confidence: float, features: dict, restore_url: str = "") -> str:
     """Return a styled HTML email body."""
     colour   = _ATTACK_COLOURS.get(attack_type or "", _DEFAULT_COLOUR)
     label    = attack_type or "Unknown Anomaly"
@@ -51,6 +51,14 @@ def _build_html(slice_id: str, attack_type: str | None,
         f"<td style='padding:6px 12px;font-weight:600;color:#1a202c;'>{v:.2f}</td></tr>"
         for k, v in features.items()
     )
+
+    restore_btn = (
+        f"<a href='{restore_url}' "
+        f"style='background:#276749;color:#ffffff;text-decoration:none;"
+        f"padding:12px 24px;border-radius:6px;font-weight:600;"
+        f"font-size:14px;display:inline-block;'>"
+        f"🔒 Restore Isolation</a>"
+    ) if restore_url else ""
 
     return f"""
 <!DOCTYPE html>
@@ -137,11 +145,13 @@ def _build_html(slice_id: str, attack_type: str | None,
             <div style="margin-top:28px;text-align:center;">
               <a href="http://localhost:8501"
                  style="background:{colour};color:#ffffff;
-                        text-decoration:none;padding:12px 28px;
+                        text-decoration:none;padding:12px 24px;
                         border-radius:6px;font-weight:600;
-                        font-size:14px;display:inline-block;">
+                        font-size:14px;display:inline-block;
+                        margin-right:12px;">
                 Open Dashboard →
               </a>
+              {restore_btn}
             </div>
 
           </td>
@@ -170,6 +180,7 @@ def send_attack_alert(
     attack_type: str | None,
     confidence: float,
     features: dict,
+    restore_url: str = "",
 ) -> bool:
     """
     Send an HTML alert email via Gmail SMTP.
@@ -204,7 +215,7 @@ def send_attack_alert(
         f"Time: {datetime.datetime.utcnow().isoformat()} UTC\n"
     )
     msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(_build_html(slice_id, attack_type, confidence, features), "html"))
+    msg.attach(MIMEText(_build_html(slice_id, attack_type, confidence, features, restore_url), "html"))
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:

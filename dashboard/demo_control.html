@@ -169,12 +169,7 @@
       box-shadow: 0 4px 20px #f8514940;
     }
     .btn-inject:hover:not(:disabled) { box-shadow: 0 6px 28px #f8514960; }
-    .btn-restore {
-      background: linear-gradient(135deg, #1a7a1a, #3fb950);
-      color: #fff;
-      box-shadow: 0 4px 20px #3fb95040;
-    }
-    .btn-restore:hover:not(:disabled) { box-shadow: 0 6px 28px #3fb95060; }
+    .btn-inject:hover:not(:disabled) { box-shadow: 0 6px 28px #f8514960; }
     .btn-stress {
       background: linear-gradient(135deg, #1a2a5a, #2979ff);
       color: #fff;
@@ -269,7 +264,7 @@
   <div class="header">
     <div class="badge">5G Slice Control Plane</div>
     <h1>🛡️ Isolation Validator<br>Control Console</h1>
-    <p class="subtitle">Tap to inject or restore network slice breaches</p>
+    <p class="subtitle">Tap to attack Slice A or Slice B independently</p>
   </div>
 
   <!-- Status Card -->
@@ -304,13 +299,13 @@
 
   <!-- Action Buttons -->
   <div class="button-group">
-    <button class="btn btn-inject" id="btnInject" onclick="triggerInject()">
+    <button class="btn btn-inject" id="btnInjectA" onclick="triggerInject('slice-a')">
       <span class="btn-icon">💥</span>
-      INJECT BREACH
+      ATTACK SLICE A
     </button>
-    <button class="btn btn-restore" id="btnRestore" onclick="triggerRestore()">
-      <span class="btn-icon">🔒</span>
-      RESTORE ISOLATION
+    <button class="btn btn-inject" id="btnInjectB" onclick="triggerInject('slice-b')">
+      <span class="btn-icon">💥</span>
+      ATTACK SLICE B
     </button>
     <button class="btn btn-stress" id="btnStress" onclick="triggerCpuStress()">
       <span class="btn-icon">🔥</span>
@@ -476,8 +471,8 @@
         }
       }
 
-      document.getElementById('btnInject').disabled  = breachActive;
-      document.getElementById('btnRestore').disabled = !breachActive;
+      document.getElementById('btnInjectA').disabled = breachActive;
+      document.getElementById('btnInjectB').disabled = breachActive;
 
     } catch (e) {
       document.getElementById('statusLabel').textContent = '⚡ API unreachable';
@@ -487,37 +482,29 @@
   }
 
   // ── Inject breach ──────────────────────────────────────────────────────────
-  async function triggerInject() {
-    document.getElementById('btnInject').disabled = true;
-    showToast('Sending breach injection command…', 'info');
+  async function triggerInject(sliceId) {
+    const btnId = sliceId === 'slice-a' ? 'btnInjectA' : 'btnInjectB';
+    document.getElementById(btnId).disabled = true;
+    showToast(`Sending breach injection command for ${sliceId}…`, 'info');
     try {
-      const r = await fetch(`${API}/demo/inject`, { method: 'POST' });
+      const r = await fetch(`${API}/demo/inject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slice_id: sliceId })
+      });
       const d = await r.json();
       if (d.status === 'injected') {
         injectTime = Date.now();
-        showToast('✅ Breach injected! Watch the dashboard gauge drop in ~15 seconds.', 'success');
+        showToast(`✅ Breach injected on ${sliceId}! Watch the dashboard gauge drop in ~15 seconds.`, 'success');
       } else if (d.status === 'already_active') {
-        showToast('⚠️ Breach already active. Tap RESTORE first.', 'error');
-        document.getElementById('btnInject').disabled = false;
+        showToast(`⚠️ Breach already active on ${sliceId}.`, 'error');
+        document.getElementById(btnId).disabled = false;
       } else {
         showToast(`Response: ${d.message}`, 'info');
       }
     } catch (e) {
       showToast(`❌ Connection error: ${e.message}`, 'error');
-      document.getElementById('btnInject').disabled = false;
-    }
-  }
-
-  // ── Restore isolation ──────────────────────────────────────────────────────
-  async function triggerRestore() {
-    document.getElementById('btnRestore').disabled = true;
-    showToast('Sending restore command…', 'info');
-    try {
-      const r = await fetch(`${API}/demo/restore`, { method: 'POST' });
-      const d = await r.json();
-      showToast('✅ Isolation restoring. Confidence will recover in 30–60 seconds.', 'success');
-    } catch (e) {
-      showToast(`❌ Connection error: ${e.message}`, 'error');
+      document.getElementById(btnId).disabled = false;
     }
   }
 

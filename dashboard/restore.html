@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>Restore Isolation</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+    }
+    .card {
+      width: 100%;
+      max-width: 420px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 16px;
+      padding: 32px 28px;
+      text-align: center;
+    }
+    .alert-badge {
+      display: inline-block;
+      background: #2d1117;
+      border: 1px solid #f85149;
+      color: #f85149;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border-radius: 20px;
+      padding: 4px 14px;
+      margin-bottom: 20px;
+    }
+    h1 { font-size: 20px; font-weight: 700; color: #f0f6fc; margin-bottom: 8px; }
+    .sub { font-size: 13px; color: #6b7280; margin-bottom: 28px; }
+    .conf-row { display: flex; gap: 16px; margin-bottom: 28px; }
+    .conf-block { flex: 1; background: #0d1117; border-radius: 10px; padding: 14px; }
+    .conf-name { font-size: 11px; color: #8b949e; margin-bottom: 4px; }
+    .conf-value { font-size: 26px; font-weight: 700; }
+    .high { color: #3fb950; } .medium { color: #d29922; } .low { color: #f85149; }
+    .btn-restore {
+      width: 100%;
+      border: none;
+      border-radius: 14px;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      padding: 22px;
+      background: linear-gradient(135deg, #1a7a1a, #3fb950);
+      color: #fff;
+      box-shadow: 0 4px 20px #3fb95040;
+      transition: transform 0.1s, opacity 0.2s;
+    }
+    .btn-restore:active { transform: scale(0.97); }
+    .btn-restore:disabled { opacity: 0.45; cursor: not-allowed; }
+    .toast {
+      margin-top: 20px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      border-left: 4px solid;
+      display: none;
+    }
+    .toast.success { background: #0d1a0d; border-color: #3fb950; color: #7ee787; display: block; }
+    .toast.error   { background: #2d1117; border-color: #f85149; color: #f97071; display: block; }
+    .footer { margin-top: 28px; font-size: 11px; color: #3d444d; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="alert-badge">🔴 Breach Detected</div>
+    <h1>Restore Network Isolation</h1>
+    <p class="sub">Tap the button below to immediately restore slice isolation and begin confidence recovery.</p>
+
+    <div class="conf-row">
+      <div class="conf-block">
+        <div class="conf-name">slice-a</div>
+        <div class="conf-value low" id="confA">—</div>
+      </div>
+      <div class="conf-block">
+        <div class="conf-name">slice-b</div>
+        <div class="conf-value low" id="confB">—</div>
+      </div>
+    </div>
+
+    <button class="btn-restore" id="btnRestore" onclick="triggerRestore()">
+      🔒 RESTORE ISOLATION
+    </button>
+
+    <div class="toast" id="toast"></div>
+    <div class="footer">5G/6G Network Slicing Isolation Validator</div>
+  </div>
+
+<script>
+  const API = window.location.origin;
+
+  function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `toast ${type}`;
+  }
+
+  function confClass(v) {
+    if (v >= 70) return 'high';
+    if (v >= 40) return 'medium';
+    return 'low';
+  }
+
+  async function pollScores() {
+    try {
+      const r = await fetch(`${API}/score`, { signal: AbortSignal.timeout(3000) });
+      if (!r.ok) return;
+      const data = await r.json();
+      const scores = Array.isArray(data) ? data : [data];
+      scores.forEach(s => {
+        if (!s.slice_id || s.isolation_confidence === null) return;
+        const elId = s.slice_id === 'slice-a' ? 'confA' : 'confB';
+        const el = document.getElementById(elId);
+        if (el) {
+          el.textContent = `${s.isolation_confidence.toFixed(0)}%`;
+          el.className = `conf-value ${confClass(s.isolation_confidence)}`;
+        }
+      });
+    } catch (_) {}
+  }
+
+  async function triggerRestore() {
+    document.getElementById('btnRestore').disabled = true;
+    showToast('Sending restore command…', 'info');
+    try {
+      const r = await fetch(`${API}/demo/restore`, { method: 'POST' });
+      if (r.ok) {
+        showToast('✅ Isolation restoring. Confidence will recover in 30–60 seconds.', 'success');
+      } else {
+        showToast('❌ Restore failed. Check API logs.', 'error');
+        document.getElementById('btnRestore').disabled = false;
+      }
+    } catch (e) {
+      showToast(`❌ Connection error: ${e.message}`, 'error');
+      document.getElementById('btnRestore').disabled = false;
+    }
+  }
+
+  pollScores();
+  setInterval(pollScores, 3000);
+</script>
+</body>
+</html>
