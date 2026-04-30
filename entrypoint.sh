@@ -30,17 +30,22 @@ db = os.environ.get('DB_PATH', '/data/metrics.db')
 conn = sqlite3.connect(db)
 conn.executescript('''
     CREATE TABLE IF NOT EXISTS metrics (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp      REAL    NOT NULL,
-        slice_id       TEXT    NOT NULL,
-        cpu_pct        REAL    NOT NULL,
-        mem_mb         REAL    NOT NULL,
-        net_rx_kb      REAL    NOT NULL,
-        net_tx_kb      REAL    NOT NULL,
-        anomaly_score REAL    DEFAULT NULL
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp     REAL    NOT NULL,
+        slice_id      TEXT    NOT NULL,
+        cpu_pct       REAL    NOT NULL,
+        mem_mb        REAL    NOT NULL,
+        net_rx_kb     REAL    NOT NULL,
+        net_tx_kb     REAL    NOT NULL,
+        anomaly_score REAL    DEFAULT NULL,
+        attack_type   TEXT    DEFAULT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_ts       ON metrics(timestamp);
     CREATE INDEX IF NOT EXISTS idx_slice_ts ON metrics(slice_id, timestamp);
+    CREATE TABLE IF NOT EXISTS drift_config (
+        key   TEXT PRIMARY KEY,
+        value TEXT
+    );
 ''')
 conn.commit()
 conn.close()
@@ -54,7 +59,7 @@ COLLECTOR_PID=$!
 wait $COLLECTOR_PID
 echo "[entrypoint] Baseline collection done."
 
-# ── Step 4: Train model ──────────────────────────────────────────────
+# ── Step 4: Train model (from SQLite baseline) ───────────────────────
 echo "[entrypoint] Training IsolationForest model..."
 python /app/ml/train.py
 echo "[entrypoint] Model trained: $MODEL_PATH"
@@ -62,9 +67,6 @@ echo "[entrypoint] Model trained: $MODEL_PATH"
 # ── Step 5: Start Services ───────────────────────────────────────────
 echo "[entrypoint] Starting Services..."
 
-# Start Collector
-python /app/collector/main.py &
-COLLECTOR_PID=$!
 
 # Start FastAPI (0.0.0.0 allows external connection)
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --log-level warning &
@@ -86,14 +88,27 @@ echo "  Dashboard: http://localhost:8501"
 echo "======================================================"
 
 # ── Keep container alive & Monitor ──────────────────────────────────
+
 trap 'echo "Shutting down..."; kill $COLLECTOR_PID $API_PID $DASH_PID 2>/dev/null; exit 0' SIGTERM SIGINT
 
+# ── Step 8: Watchdog loop ─────────────────────────────────────────────
+# Every 10s: restart collector if it died
+# Every 15min: check drift_flag set by the API's drift_detector;
+#              if set, retrain from Supabase and hot-reload the model
+
+LAST_RETRAIN_CHECK=$(date +%s)
+RETRAIN_INTERVAL=900   # 15 minutes
+
 while true; do
-    # Watchdog for Collector
+    sleep 10
+
+    # a) Service Watchdog (Collector, API, Dashboard)
+
     if ! kill -0 $COLLECTOR_PID 2>/dev/null; then
         echo "[watchdog] Restarting collector..."
         python /app/collector/main.py &
         COLLECTOR_PID=$!
+        echo "[watchdog] Collector restarted PID=$COLLECTOR_PID"
     fi
 
     # Watchdog for API
@@ -110,5 +125,53 @@ while true; do
         DASH_PID=$!
     fi
 
-    sleep 10
+    # b) Drift-triggered retrain (every 15 minutes)
+    NOW=$(date +%s)
+    ELAPSED=$(( NOW - LAST_RETRAIN_CHECK ))
+
+    if [ "$ELAPSED" -ge "$RETRAIN_INTERVAL" ]; then
+        LAST_RETRAIN_CHECK=$NOW
+
+        DRIFT_FLAG=$(python - <<'PYEOF'
+import sqlite3, os, pathlib
+db = pathlib.Path(os.environ.get("DB_PATH", "/data/metrics.db"))
+if not db.exists():
+    print("0")
+else:
+    try:
+        conn = sqlite3.connect(db)
+        row  = conn.execute(
+            "SELECT value FROM drift_config WHERE key='drift_flag'"
+        ).fetchone()
+        print(row[0] if row else "0")
+        conn.close()
+    except Exception:
+        print("0")
+PYEOF
+)
+
+        if [ "$DRIFT_FLAG" = "1" ]; then
+            echo "[watchdog] drift_flag=1 — retraining from Supabase..."
+            RETRAIN_REASON=drift_detected python /app/ml/train.py --source supabase --reason drift_detected \
+                && echo "[watchdog] Retrain complete." \
+                || echo "[watchdog] WARNING: retrain failed, keeping existing model."
+
+            # Hot-reload the new model into the running API
+            curl -sf -X POST http://localhost:8000/reload-model > /dev/null \
+                && echo "[watchdog] Model hot-reloaded into API." \
+                || echo "[watchdog] WARNING: hot-reload request failed."
+
+            # Clear the drift flag
+            python - <<'PYEOF'
+import sqlite3, os, pathlib
+conn = sqlite3.connect(pathlib.Path(os.environ.get("DB_PATH", "/data/metrics.db")))
+conn.execute(
+    "INSERT OR REPLACE INTO drift_config (key, value) VALUES ('drift_flag', '0')"
+)
+conn.commit()
+conn.close()
+print("[watchdog] drift_flag cleared.")
+PYEOF
+        fi
+    fi
 done

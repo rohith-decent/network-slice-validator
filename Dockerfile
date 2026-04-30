@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Application Directories ────────────────────────────────────────
-RUN mkdir -p /app /data /ml /app/collector /app/ml /app/api /app/dashboard
+RUN mkdir -p /app /data /ml /app/collector /app/ml /app/api /app/dashboard /app/sb
 
 # ── Working Directory ──────────────────────────────────────────────
 WORKDIR /app
@@ -26,13 +26,16 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ── Source Code ────────────────────────────────────────────────────
-COPY collector/ /app/collector/
-COPY ml/        /app/ml/
-COPY api/       /app/api/
-COPY dashboard/ /app/dashboard/
-COPY --chmod=755 entrypoint.sh .
+COPY collector/  /app/collector/
+COPY ml/         /app/ml/
+COPY api/        /app/api/
+COPY dashboard/  /app/dashboard/
+COPY sb/         /app/sb/
+COPY entrypoint.sh /app/entrypoint.sh
 
-# ── Environment Variables (Section 11) ─────────────────────────────
+RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
+# ── Environment Variables ──────────────────────────────────────────
 ENV PYTHONPATH=/app
 ENV DB_PATH=/data/metrics.db
 ENV MODEL_PATH=/ml/model.pkl

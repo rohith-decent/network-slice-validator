@@ -59,6 +59,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: main-service
+    env_file:
+      - .env                         # loads SUPABASE_URL, SUPABASE_KEY, ALERT_EMAIL_FROM, ALERT_EMAIL_TO, GMAIL_APP_PASSWORD
     environment:
       - DB_PATH=/data/metrics.db
       - MODEL_PATH=/ml/model.pkl
