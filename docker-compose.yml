@@ -59,6 +59,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: main-service
+    env_file:
+      - .env                         # loads SUPABASE_URL, SUPABASE_KEY, ALERT_EMAIL_FROM, ALERT_EMAIL_TO, GMAIL_APP_PASSWORD
     environment:
       - DB_PATH=/data/metrics.db
       - MODEL_PATH=/ml/model.pkl
@@ -88,4 +90,4 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 90s # Increased because of the 60s baseline wait

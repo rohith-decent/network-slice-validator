@@ -201,3 +201,21 @@ if __name__ == "__main__":
 
     save(bundle)
     log.info("Done. Model ready for inference.")
+
+    # ── Write to Supabase model_retrain_log ───────────────────────────────────
+    # Determine the reason: env var RETRAIN_REASON overrides default "startup"
+    reason = os.environ.get("RETRAIN_REASON", "startup")
+    import json
+    try:
+        import datetime as _dt
+        from sb.retrain import log_retrain
+        log_retrain({
+            "retrained_at": _dt.datetime.utcnow().isoformat(),
+            "reason":       reason,
+            "n_samples":    bundle["n_samples"],
+            "slice_ids":    json.dumps(["slice-a", "slice-b"]),
+        })
+        log.info("[train] Retrain event logged to Supabase: reason=%s n_samples=%d",
+                 reason, bundle["n_samples"])
+    except Exception as exc:
+        log.debug("[train] Supabase retrain log skipped: %s", exc)
