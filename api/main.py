@@ -258,6 +258,26 @@ def _correlate_slice(conn: sqlite3.Connection, slice_id: str):
         conn.commit()
         log.info("Incident OPENED for %s (%s)", slice_id, attack_type)
 
+        # Send email alert for real network breaches detected by the correlator
+        try:
+            from sb.email_alert import send_attack_alert
+            with _bundle_lock:
+                _b = dict(_bundle)
+            last_row = conn.execute(
+                "SELECT cpu_pct, mem_mb, net_rx_kb, net_tx_kb FROM metrics "
+                "WHERE slice_id=? ORDER BY timestamp DESC LIMIT 1",
+                (slice_id,)
+            ).fetchone()
+            features_dict = dict(last_row) if last_row else {}
+            send_attack_alert(
+                slice_id=slice_id,
+                attack_type=attack_type,
+                confidence=min_conf,
+                features=features_dict,
+            )
+        except Exception as exc:
+            log.debug("Correlator email alert skipped: %s", exc)
+
         _sb_open_incident({
             "slice_id":       slice_id,
             "attack_type":    attack_type,
@@ -361,25 +381,76 @@ _injection_lock = asyncio.Lock()
 
 
 async def _run_injection(slice_id: str, attack_type: str, duration_s: int = 60):
-    profile  = ATTACK_PROFILES.get(attack_type, ATTACK_PROFILES["cpu"])
-    end_time = time.time() + duration_s
+    profile      = ATTACK_PROFILES.get(attack_type, ATTACK_PROFILES["cpu"])
+    end_time     = time.time() + duration_s
+    first_row    = True
     log.info("Injection started: slice=%s type=%s duration=%ds",
              slice_id, attack_type, duration_s)
     try:
         while time.time() < end_time:
-            conn = get_db()
+            with _bundle_lock:
+                bundle = dict(_bundle)
+
             ts   = time.time()
             vals = {k: v() for k, v in profile.items()}
+
+            # Score the injected row so anomaly_score + attack_type are filled
+            scored = {}
+            if bundle:
+                try:
+                    scored = score_row(
+                        {"slice_id": slice_id, "timestamp": ts, **vals},
+                        bundle,
+                    )
+                except Exception:
+                    pass
+
+            anomaly_score = scored.get("anomaly_score")
+            classified_at = scored.get("attack_type", attack_type.replace("_", " ").title())
+            confidence    = scored.get("isolation_confidence", 0.0)
+
+            conn = get_db()
             conn.execute(
                 "INSERT INTO metrics "
-                "(timestamp, slice_id, cpu_pct, mem_mb, net_rx_kb, net_tx_kb) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(timestamp, slice_id, cpu_pct, mem_mb, net_rx_kb, net_tx_kb, "
+                " anomaly_score, attack_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (ts, slice_id,
                  vals["cpu_pct"], vals["mem_mb"],
-                 vals["net_rx_kb"], vals["net_tx_kb"])
+                 vals["net_rx_kb"], vals["net_tx_kb"],
+                 anomaly_score, classified_at)
             )
             conn.commit()
             conn.close()
+
+            # Mirror every injected row to Supabase
+            _sb_push_metric({
+                "slice_id":    slice_id,
+                "cpu_pct":     vals["cpu_pct"],
+                "mem_mb":      vals["mem_mb"],
+                "net_rx_kb":   vals["net_rx_kb"],
+                "net_tx_kb":   vals["net_tx_kb"],
+                "anomaly_score": anomaly_score,
+                "is_anomaly":  True,
+                "confidence":  confidence,
+                "attack_type": classified_at,
+                "sampled_at":  _dt.datetime.utcfromtimestamp(ts).isoformat(),
+            })
+
+            # Send email alert only on the first injected row
+            if first_row:
+                first_row = False
+                try:
+                    from sb.email_alert import send_attack_alert
+                    send_attack_alert(
+                        slice_id=slice_id,
+                        attack_type=classified_at,
+                        confidence=confidence,
+                        features=vals,
+                    )
+                except Exception as exc:
+                    log.debug("Email alert skipped: %s", exc)
+
             await asyncio.sleep(5)
     except asyncio.CancelledError:
         log.info("Injection cancelled: slice=%s", slice_id)
