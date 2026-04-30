@@ -38,6 +38,12 @@ from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
 import io
+import collections
+import requests as _req
+from fastapi import Request, Query
+
+_exfil_store = collections.deque(maxlen=50)
+_exfil_lock  = threading.Lock()
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -329,6 +335,12 @@ def _do_inject_breach():
     _run_cmd(["docker", "exec", "-d", "slice-b", "iperf3", "-s"])
     _run_cmd(["docker", "exec", "-d", "slice-a", "iperf3", "-c", "slice-b", "-t", "30", "-b", "5M"])
     _breach_active = True
+
+    # ── Signal agents ──
+    l2 = os.environ.get("LAPTOP2_IP", "127.0.0.1")
+    l3 = os.environ.get("LAPTOP3_IP", "127.0.0.1")
+    _req.post(f"http://{l2}:9000/start", timeout=3)
+    _req.post(f"http://{l3}:9001/start", timeout=3)
     log.info("[demo] Breach active. Anomaly expected in ~15s.")
 
 def _do_restore_isolation():
@@ -336,6 +348,12 @@ def _do_restore_isolation():
     log.info("[demo] Restoring isolation → disconnecting %s", BREACH_NETWORK)
     _run_cmd(["docker", "network", "disconnect", BREACH_NETWORK, "slice-a"])
     _breach_active = False
+
+    # ── Signal agents ──
+    l2 = os.environ.get("LAPTOP2_IP", "127.0.0.1")
+    l3 = os.environ.get("LAPTOP3_IP", "127.0.0.1")
+    _req.post(f"http://{l2}:9000/stop", timeout=3)
+    _req.post(f"http://{l3}:9001/stop", timeout=3)
     log.info("[demo] Isolation restored.")
 
 
@@ -557,5 +575,19 @@ def restore_isolation(background_tasks: BackgroundTasks):
     return {"status": "restoring", "message": "Isolation restoring. Recovery in 30-60s.", "breach_active": False}
 
 @app.get("/demo/status")
-def get_status():
-    return {"breach_active": _breach_active, "breach_network": BREACH_NETWORK, "timestamp": time.time()}
+def demo_status():
+    """Return current demo breach status."""
+    return {"breach_active": _breach_active}
+
+@app.post("/exfil/ingest")
+async def exfil_ingest(request: Request):
+    payload = await request.json()
+    with _exfil_lock:
+        _exfil_store.append(payload)
+    return {"status": "ok"}
+
+@app.get("/exfil/latest")
+def exfil_latest(limit: int = Query(10, ge=1, le=50)):
+    with _exfil_lock:
+        items = list(_exfil_store)[-limit:]
+    return {"items": items}

@@ -494,6 +494,35 @@ def page_live_monitor(refresh_rate: int, history_len: int, selected_slices: list
     st.markdown("### Alert Feed (last 10 anomalies)")
     render_alert_feed(dfs, score_map)
 
+    # ── Exfiltration Live Feed ────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("🚨 Cross-Slice Exfiltration Monitor")
+
+    try:
+        resp = requests.get(f"{API_BASE}/exfil/latest?limit=10", timeout=2)
+        items = resp.json().get("items", []) if resp.ok else []
+    except Exception:
+        items = []
+
+    if not items:
+        st.info("🔒 Isolation active — no exfiltration detected")
+    else:
+        st.error("⚠️ DATA LEAK DETECTED: slice-a → slice-b")
+        for batch in reversed(items):
+            ts = batch.get("timestamp", 0)
+            label = time.strftime("%H:%M:%S", time.localtime(ts))
+            for p in batch.get("patterns", []):
+                icon = {"typing": "⚡", "video": "🎬", "camera": "📷"}.get(p["type"], "🔍")
+                conf = p["confidence"]
+                bar_val = conf / 100
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown(f"**{icon} {p['details']} — {conf}% confidence** `{label}`")
+                    st.progress(bar_val)
+                with col2:
+                    st.metric("Confidence", f"{conf}%")
+
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ── PAGE 2: ANOMALY CLASSIFIER ─────────────────────────────────────────────────
