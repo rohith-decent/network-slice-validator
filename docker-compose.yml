@@ -69,6 +69,12 @@ services:
       - DASHBOARD_PORT=8501
       - SLICE_NAMES=slice-a,slice-b
       - LOG_LEVEL=INFO
+      # ── AI Layer ─────────────────────────────────────────────────────
+      # Add your Groq API key to .env as: GROQ_API_KEY=gsk_...
+      # Or hard-code below (not recommended for production):
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - AI_MODEL=llama-3.3-70b-versatile
+      - AI_FORECASTER_ROWS=50
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:rw
       - db_data:/data

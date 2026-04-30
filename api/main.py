@@ -21,6 +21,11 @@ Endpoints (all original preserved + new):
   GET  /model/status             – Capstone 4: model age, drift rate, retrain log
   POST /exfil/ingest             – ingest cross-slice exfiltration data
   GET  /exfil/latest             – view latest exfiltrated payloads
+
+  ── AI Layer (arm's-length, read-only) ──────────────────────────────────────
+  GET  /ai/forecast              – Predictive breach risk for a slice (Feature A)
+  GET  /ai/incident/{id}/reason  – Forensic hypothesis for a closed incident (Feature B)
+  GET  /ai/status                – Whether AI key is configured
 """
 
 import io
@@ -111,7 +116,8 @@ def get_db() -> sqlite3.Connection:
             peak_score     REAL,
             min_confidence REAL,
             duration_s     REAL,
-            is_active      INTEGER DEFAULT 1
+            is_active      INTEGER DEFAULT 1,
+            ai_forensic_note TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_inc_slice ON incidents(slice_id, started_at);
         CREATE TABLE IF NOT EXISTS drift_config (
@@ -119,6 +125,12 @@ def get_db() -> sqlite3.Connection:
             value TEXT
         );
     """)
+    # Migrate existing incidents table if ai_forensic_note column is missing
+    try:
+        conn.execute("ALTER TABLE incidents ADD COLUMN ai_forensic_note TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.commit()
     return conn
 
@@ -360,6 +372,50 @@ def _correlate_slice(conn: sqlite3.Connection, slice_id: str):
             _dt.datetime.utcfromtimestamp(now).isoformat(),
             duration,
         )
+
+        # ── AI Incident Reasoner (runs in background thread, never blocks) ──
+        def _run_ai_reasoner(inc_id: int, sid: str, started: float):
+            try:
+                from ai.layer import reason_about_incident
+                # Fetch the closed incident record
+                _conn = get_db()
+                inc_row = _conn.execute(
+                    "SELECT * FROM incidents WHERE id=?", (inc_id,)
+                ).fetchone()
+                if not inc_row:
+                    _conn.close()
+                    return
+                inc_dict = dict(inc_row)
+                # Fetch telemetry window: 30 rows around the breach
+                window_rows = _conn.execute(
+                    "SELECT timestamp, cpu_pct, mem_mb, net_rx_kb, net_tx_kb, anomaly_score "
+                    "FROM metrics WHERE slice_id=? AND timestamp >= ? AND timestamp <= ? "
+                    "ORDER BY timestamp ASC LIMIT 30",
+                    (sid, started - 30, now + 5)
+                ).fetchall()
+                telemetry = [dict(r) for r in window_rows]
+                _conn.close()
+
+                note = reason_about_incident(inc_dict, telemetry)
+                if note:
+                    _conn2 = get_db()
+                    _conn2.execute(
+                        "UPDATE incidents SET ai_forensic_note=? WHERE id=?",
+                        (note, inc_id)
+                    )
+                    _conn2.commit()
+                    _conn2.close()
+                    log.info("[AI] Forensic note written for incident %d (%s)", inc_id, sid)
+            except Exception as exc:
+                log.warning("[AI] Reasoner background error: %s", exc)
+
+        import threading
+        t = threading.Thread(
+            target=_run_ai_reasoner,
+            args=(active["id"], slice_id, active["started_at"]),
+            daemon=True,
+        )
+        t.start()
 
 
 # ── Drift detector (Capstone 4) ───────────────────────────────────────────────
@@ -982,4 +1038,132 @@ def model_status():
         "drift_strikes":       _drift_strikes,
         "drift_threshold":     DRIFT_THRESHOLD,
         "last_retrain":        last_retrain[0] if last_retrain else None,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AI LAYER ENDPOINTS  (arm's-length — read-only data, returns text/JSON only)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/ai/status")
+def ai_status():
+    """Check whether the AI layer is configured and ready."""
+    import os as _os
+    key_set = bool(_os.environ.get("GROQ_API_KEY", ""))
+    return {
+        "ai_available":  key_set,
+        "model":         _os.environ.get("AI_MODEL", "llama-3.3-70b-versatile"),
+        "forecaster_rows": int(_os.environ.get("AI_FORECASTER_ROWS", "50")),
+        "message": (
+            "AI layer active — predictive forecasting and incident reasoning enabled."
+            if key_set else
+            "GROQ_API_KEY not set. Add it to docker-compose.yml or .env."
+        ),
+    }
+
+
+@app.get("/ai/forecast")
+def ai_forecast(
+    slice_id: str = Query(..., description="Slice to analyze, e.g. slice-a"),
+    limit:    int = Query(50, ge=10, le=100),
+):
+    """
+    Predictive breach forecaster (AI Feature A).
+
+    Reads the last `limit` telemetry rows for the slice and asks Claude
+    to reason about whether a breach is trending. Returns a risk_level
+    of stable | rising | critical BEFORE the IsolationForest fires.
+
+    The AI never touches the database directly — this endpoint reads
+    /metrics/history data and passes it as a JSON payload to the API.
+    """
+    try:
+        from ai.layer import predict_breach_risk
+    except ImportError as exc:
+        raise HTTPException(500, f"AI layer not installed: {exc}")
+
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT timestamp, cpu_pct, mem_mb, net_rx_kb, net_tx_kb, anomaly_score "
+        "FROM metrics WHERE slice_id=? ORDER BY timestamp DESC LIMIT ?",
+        (slice_id, limit),
+    ).fetchall()
+    conn.close()
+
+    history = list(reversed([dict(r) for r in rows]))  # oldest → newest
+    result  = predict_breach_risk(slice_id, history)
+    return result
+
+
+@app.get("/ai/incident/{incident_id}/reason")
+def ai_incident_reason(incident_id: int):
+    """
+    Autonomous incident reasoner (AI Feature B).
+
+    Fetches a closed incident by ID, loads the telemetry window around
+    the breach, and returns (or triggers generation of) an AI forensic
+    hypothesis. If the note already exists in the DB it is returned
+    immediately. If not, it is generated on-demand and cached.
+
+    The AI never modifies core system state — only writes ai_forensic_note
+    to the incidents table.
+    """
+    try:
+        from ai.layer import reason_about_incident
+    except ImportError as exc:
+        raise HTTPException(500, f"AI layer not installed: {exc}")
+
+    conn = get_db()
+    inc_row = conn.execute(
+        "SELECT * FROM incidents WHERE id=?", (incident_id,)
+    ).fetchone()
+
+    if not inc_row:
+        conn.close()
+        raise HTTPException(404, f"Incident {incident_id} not found.")
+
+    inc = dict(inc_row)
+
+    # Return cached note if already generated
+    if inc.get("ai_forensic_note"):
+        conn.close()
+        import json as _json
+        try:
+            return {"incident_id": incident_id, "note": _json.loads(inc["ai_forensic_note"]), "cached": True}
+        except Exception:
+            return {"incident_id": incident_id, "note": inc["ai_forensic_note"], "cached": True}
+
+    # Generate on-demand for open incidents or ones that missed the auto-trigger
+    started = inc.get("started_at", 0)
+    ended   = inc.get("resolved_at") or time.time()
+
+    window_rows = conn.execute(
+        "SELECT timestamp, cpu_pct, mem_mb, net_rx_kb, net_tx_kb, anomaly_score "
+        "FROM metrics WHERE slice_id=? AND timestamp >= ? AND timestamp <= ? "
+        "ORDER BY timestamp ASC LIMIT 30",
+        (inc["slice_id"], started - 30, ended + 5)
+    ).fetchall()
+    telemetry = [dict(r) for r in window_rows]
+
+    note = reason_about_incident(inc, telemetry)
+
+    if note:
+        conn.execute(
+            "UPDATE incidents SET ai_forensic_note=? WHERE id=?",
+            (note, incident_id)
+        )
+        conn.commit()
+
+    conn.close()
+
+    import json as _json
+    try:
+        parsed = _json.loads(note) if note else None
+    except Exception:
+        parsed = note
+
+    return {
+        "incident_id": incident_id,
+        "note":        parsed,
+        "cached":      False,
     }

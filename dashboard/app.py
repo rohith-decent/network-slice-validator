@@ -233,6 +233,44 @@ def fetch_injection_status() -> list[str]:
         return []
 
 
+# ── AI Layer fetch helpers ─────────────────────────────────────────────────────
+
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_ai_forecast(slice_id: str) -> dict:
+    """Fetch predictive breach risk from AI layer. 30s cache to avoid hammering API."""
+    try:
+        r = requests.get(
+            f"{API_BASE}/ai/forecast",
+            params={"slice_id": slice_id, "limit": 50},
+            timeout=25,  # AI call can take up to 20s
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return {"risk_level": "stable", "ai_available": False, "reasoning": "AI layer unavailable."}
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_ai_incident_note(incident_id: int) -> dict:
+    """Fetch or generate AI forensic note for a closed incident."""
+    try:
+        r = requests.get(f"{API_BASE}/ai/incident/{incident_id}/reason", timeout=25)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_ai_status() -> dict:
+    try:
+        r = requests.get(f"{API_BASE}/ai/status", timeout=3)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return {"ai_available": False}
+
+
 # ── Attack badge ───────────────────────────────────────────────────────────────
 
 ATTACK_BADGE: dict[str, tuple[str, str, str]] = {
@@ -263,6 +301,84 @@ def confidence_color(val: float | None) -> str:
     elif val >= 40:
         return "#d29922"
     return "#f85149"
+
+
+# ── AI Predictive Panel ────────────────────────────────────────────────────────
+
+_RISK_CONFIG = {
+    "stable":   {"icon": "🟢", "label": "STABLE",   "color": "#3fb950", "bg": "#0d1a0d", "border": "#3fb950"},
+    "rising":   {"icon": "🟡", "label": "RISING",   "color": "#d29922", "bg": "#1a1400", "border": "#d29922"},
+    "critical": {"icon": "🔴", "label": "CRITICAL", "color": "#f85149", "bg": "#2d1117", "border": "#f85149"},
+}
+
+
+def render_ai_forecast_panel(selected_slices: list[str]):
+    """
+    Renders the AI Predictive Breach Forecaster panel.
+    Sits above the IsolationForest gauge — fires BEFORE the gauge drops.
+    """
+    ai_status = fetch_ai_status()
+    if not ai_status.get("ai_available"):
+        st.info(
+            "🤖 AI Forecaster offline — set `GROQ_API_KEY` in your `.env` file to enable predictive breach warnings.",
+            icon="ℹ️",
+        )
+        return
+
+    st.markdown("### 🤖 AI Predictive Breach Forecaster")
+    st.caption(
+        "Claude analyzes the last 50 telemetry samples and predicts trajectory "
+        "— fires **before** the IsolationForest gauge drops."
+    )
+
+    forecast_cols = st.columns(len(selected_slices))
+    for i, name in enumerate(selected_slices):
+        with forecast_cols[i]:
+            with st.spinner(f"Analyzing {name}…"):
+                forecast = fetch_ai_forecast(name)
+
+            risk      = forecast.get("risk_level", "stable")
+            cfg       = _RISK_CONFIG.get(risk, _RISK_CONFIG["stable"])
+            conf_pct  = forecast.get("confidence_pct", 0)
+            reasoning = forecast.get("reasoning", "")
+            action    = forecast.get("recommended_action", "")
+            concerns  = forecast.get("features_of_concern", [])
+            available = forecast.get("ai_available", False)
+
+            concern_tags = " ".join(
+                f'<span style="background:#1f2937;color:#9ca3af;padding:1px 6px;'
+                f'border-radius:8px;font-size:0.70rem;">{c}</span>'
+                for c in concerns
+            ) if concerns else ""
+
+            st.markdown(
+                f"""
+                <div style="background:{cfg['bg']};border:1px solid {cfg['border']};
+                            border-radius:10px;padding:14px 16px;margin-bottom:8px;">
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+                        <span style="font-size:1.4rem;">{cfg['icon']}</span>
+                        <span style="color:{cfg['color']};font-weight:700;font-size:1rem;
+                                     letter-spacing:0.05em;">
+                            {name} — BREACH RISK: {cfg['label']}
+                        </span>
+                        <span style="color:#8b949e;font-size:0.78rem;margin-left:auto;">
+                            AI confidence: {conf_pct}%
+                        </span>
+                    </div>
+                    {f'<div style="margin-bottom:6px;">{concern_tags}</div>' if concern_tags else ''}
+                    <div style="color:#c9d1d9;font-size:0.83rem;line-height:1.5;margin-bottom:6px;">
+                        {reasoning}
+                    </div>
+                    <div style="color:#8b949e;font-size:0.78rem;font-style:italic;">
+                        ▶ {action}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            if not available:
+                st.caption("⚠️ AI layer returned no result — check API key and logs.")
 
 
 # ── Gauge chart ────────────────────────────────────────────────────────────────
@@ -887,6 +1003,10 @@ def page_live_monitor(refresh_rate: int, history_len: int, selected_slices: list
                     unsafe_allow_html=True,
                 )
 
+    # ── AI Predictive Forecaster ──────────────────────────────────────────────
+    st.markdown("### 🤖 AI Prediction")
+    render_ai_forecast_panel(selected_slices)
+    st.divider()
     st.markdown("### Current Metrics")
     card_cols = st.columns(len(selected_slices) * 4)
     for i, name in enumerate(selected_slices):
@@ -1144,6 +1264,32 @@ def page_audit_log(selected_slices: list[str]):
                 f'</div>',
                 unsafe_allow_html=True,
             )
+            # ── AI Forensic Note ──────────────────────────────────────────
+            inc_id = inc.get("id")
+            ai_note_raw = inc.get("ai_forensic_note")
+            if not is_act and inc_id:
+                with st.expander(f"🤖 AI Forensic Analysis — incident #{inc_id}", expanded=False):
+                    if ai_note_raw:
+                        import json as _json
+                        try:
+                            note = _json.loads(ai_note_raw) if isinstance(ai_note_raw, str) else ai_note_raw
+                            nc1, nc2 = st.columns(2)
+                            nc1.markdown(f"**Attack vector:** `{note.get('attack_vector','?')}`")
+                            nc2.markdown(f"**Severity:** `{note.get('severity','?')}` | **Confidence:** `{note.get('confidence','?')}`")
+                            st.markdown(f"**Hypothesis:** {note.get('hypothesis','')}")
+                            st.markdown(f"**Pre-breach signal:** {note.get('pre_breach_signal','')}")
+                            st.info(f"▶ **Recommended action:** {note.get('recommended_action','')}")
+                        except Exception:
+                            st.text(str(ai_note_raw))
+                    else:
+                        if st.button(f"Generate AI forensic note", key=f"ai_gen_{inc_id}"):
+                            with st.spinner("Asking Claude to reason about this incident…"):
+                                result = fetch_ai_incident_note(inc_id)
+                            if result.get("note"):
+                                st.success("Forensic note generated — reload the page to see it.")
+                                st.rerun()
+                            else:
+                                st.error("AI layer returned no result. Check GROQ_API_KEY.")
 
     st.divider()
 
