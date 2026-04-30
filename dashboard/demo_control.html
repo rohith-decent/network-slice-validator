@@ -307,6 +307,14 @@
       <span class="btn-icon">💥</span>
       ATTACK SLICE B
     </button>
+    <button class="btn btn-inject" id="btnInjectBoth" onclick="triggerInject('BOTH')" style="background: linear-gradient(135deg, #b71c1c, #d32f2f);">
+      <span class="btn-icon">💀</span>
+      ATTACK BOTH SLICES
+    </button>
+    <button class="btn btn-stress" id="btnRestore" onclick="restoreIsolation()" style="background: linear-gradient(135deg, #1b5e20, #43a047);">
+      <span class="btn-icon">🛡️</span>
+      RESTORE ISOLATION
+    </button>
     <button class="btn btn-stress" id="btnStress" onclick="triggerCpuStress()">
       <span class="btn-icon">🔥</span>
       CPU STRESS (slice-a)
@@ -473,6 +481,7 @@
 
       document.getElementById('btnInjectA').disabled = breachActive;
       document.getElementById('btnInjectB').disabled = breachActive;
+      document.getElementById('btnInjectBoth').disabled = breachActive;
 
     } catch (e) {
       document.getElementById('statusLabel').textContent = '⚡ API unreachable';
@@ -483,11 +492,14 @@
 
   // ── Inject breach ──────────────────────────────────────────────────────────
   async function triggerInject(sliceId) {
-    const btnId = sliceId === 'slice-a' ? 'btnInjectA' : 'btnInjectB';
+    let btnId = 'btnInjectA';
+    if (sliceId === 'slice-b') btnId = 'btnInjectB';
+    if (sliceId === 'BOTH') btnId = 'btnInjectBoth';
+    
     document.getElementById(btnId).disabled = true;
     showToast(`Sending breach injection command for ${sliceId}…`, 'info');
     try {
-      const r = await fetch(`${API}/demo/inject`, {
+      const r = await fetch(`${API}/inject_attack`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slice_id: sliceId })
@@ -497,14 +509,38 @@
         injectTime = Date.now();
         showToast(`✅ Breach injected on ${sliceId}! Watch the dashboard gauge drop in ~15 seconds.`, 'success');
       } else if (d.status === 'already_active') {
-        showToast(`⚠️ Breach already active on ${sliceId}.`, 'error');
+        showToast(`⚠️ Breach already active.`, 'error');
         document.getElementById(btnId).disabled = false;
       } else {
         showToast(`Response: ${d.message}`, 'info');
+        document.getElementById(btnId).disabled = false;
       }
     } catch (e) {
       showToast(`❌ Connection error: ${e.message}`, 'error');
       document.getElementById(btnId).disabled = false;
+    }
+  }
+
+  // ── Restore isolation ──────────────────────────────────────────────────────
+  async function restoreIsolation() {
+    const btn = document.getElementById('btnRestore');
+    btn.disabled = true;
+    showToast('Restoring isolation and executing recovery commands…', 'info');
+    try {
+      const r = await fetch(`${API}/restore_isolation`, {
+        method: 'POST'
+      });
+      const d = await r.json();
+      if (d.status === 'restoring') {
+        showToast('✅ Isolation restoration command sent. Confidence will recover soon.', 'success');
+        injectTime = null; // Reset timeline
+      } else {
+        showToast(`Response: ${d.message}`, 'info');
+      }
+    } catch (e) {
+      showToast(`❌ Restore failed: ${e.message}`, 'error');
+    } finally {
+      setTimeout(() => { btn.disabled = false; }, 2000);
     }
   }
 

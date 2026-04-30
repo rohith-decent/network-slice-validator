@@ -318,14 +318,16 @@ def _correlate_slice(conn: sqlite3.Connection, slice_id: str):
                 (slice_id,)
             ).fetchone()
             features_dict = dict(last_row) if last_row else {}
-            # Determine the public-facing host for the restore link
+            # Determine the public-facing host for links
             host = os.environ.get("PUBLIC_API_HOST", "http://localhost:8000")
+            dash_host = os.environ.get("PUBLIC_DASHBOARD_HOST", "http://localhost:8501")
             send_attack_alert(
                 slice_id=slice_id,
                 attack_type=attack_type,
                 confidence=min_conf,
                 features=features_dict,
-                restore_url=f"{host}/restore",
+                restore_url=f"{host}/restore_isolation",
+                dashboard_url=dash_host
             )
         except Exception as exc:
             log.debug("Correlator email alert skipped: %s", exc)
@@ -499,11 +501,15 @@ async def _run_injection(slice_id: str, attack_type: str, duration_s: int = 60):
                 # 1. Email alert
                 try:
                     from sb.email_alert import send_attack_alert
+                    host = os.environ.get("PUBLIC_API_HOST", "http://localhost:8000")
+                    dash_host = os.environ.get("PUBLIC_DASHBOARD_HOST", "http://localhost:8501")
                     send_attack_alert(
                         slice_id=slice_id,
                         attack_type=classified_at,
                         confidence=confidence,
                         features=vals,
+                        restore_url=f"{host}/restore_isolation",
+                        dashboard_url=dash_host
                     )
                 except Exception as exc:
                     log.debug("Email alert skipped: %s", exc)
@@ -574,38 +580,72 @@ def _run_cmd(cmd: list, timeout: int = 15) -> tuple[bool, str]:
 
 def _do_inject_breach(target_slice: str = "slice-a"):
     global _breach_active
-    # Determine attacker and victim based on target slice
-    if target_slice == "slice-b":
-        attacker, victim = "slice-b", "slice-a"
-        breach_net = f"{COMPOSE_PROJECT}_slice_a_net"
+    
+    slices_to_attack = []
+    if target_slice == "BOTH":
+        slices_to_attack = ["slice-a", "slice-b"]
     else:
-        attacker, victim = "slice-a", "slice-b"
-        breach_net = BREACH_NETWORK  # slice_b_net
+        slices_to_attack = [target_slice]
 
-    log.info("[demo] Injecting breach: %s → %s via %s", attacker, victim, breach_net)
-    _run_cmd(["docker", "network", "connect", breach_net, attacker])
-    _run_cmd(["docker", "exec", "-d", victim, "iperf3", "-s"])
-    _run_cmd(["docker", "exec", "-d", attacker, "iperf3", "-c", victim, "-t", "30", "-b", "5M"])
+    for ts in slices_to_attack:
+        # Determine attacker and victim based on target slice
+        if ts == "slice-b":
+            attacker, victim = "slice-b", "slice-a"
+            breach_net = f"{COMPOSE_PROJECT}_slice_a_net"
+        else:
+            attacker, victim = "slice-a", "slice-b"
+            breach_net = BREACH_NETWORK  # slice_b_net
+
+        log.info("[demo] Injecting breach: %s → %s via %s", attacker, victim, breach_net)
+        _run_cmd(["docker", "network", "connect", breach_net, attacker])
+        _run_cmd(["docker", "exec", "-d", victim, "iperf3", "-s"])
+        _run_cmd(["docker", "exec", "-d", attacker, "iperf3", "-c", victim, "-t", "30", "-b", "5M"])
+    
     _breach_active = True
 
     # ── Signal agents ──
     l2 = os.environ.get("LAPTOP2_IP", "127.0.0.1")
     l3 = os.environ.get("LAPTOP3_IP", "127.0.0.1")
-    _req.post(f"http://{l2}:9000/start", timeout=3)
-    _req.post(f"http://{l3}:9001/start", timeout=3)
+    try:
+        _req.post(f"http://{l2}:9000/start", timeout=3)
+        _req.post(f"http://{l3}:9001/start", timeout=3)
+    except Exception as e:
+        log.warning("Failed to signal agents: %s", e)
     log.info("[demo] Breach active. Anomaly expected in ~15s.")
 
 def _do_restore_isolation():
     global _breach_active
-    log.info("[demo] Restoring isolation → disconnecting %s", BREACH_NETWORK)
-    _run_cmd(["docker", "network", "disconnect", BREACH_NETWORK, "slice-a"])
+    log.info("[demo] Restoring isolation → executing powerful recovery commands")
+    
+    # Powerful recovery commands as requested
+    try:
+        # Disconnect containers from breach networks
+        _run_cmd(["docker", "network", "disconnect", f"{COMPOSE_PROJECT}_slice_b_net", "slice-a"])
+        _run_cmd(["docker", "network", "disconnect", f"{COMPOSE_PROJECT}_slice_a_net", "slice-b"])
+        
+        # Flush iptables and reset traffic control (if applicable in the environment)
+        # Note: These might fail if not running with enough privileges or if tools aren't present
+        # but we try them anyway as requested.
+        os.system("iptables -F")
+        os.system("tc qdisc del dev eth0 root || true")
+        
+        # Kill iperf3 processes
+        _run_cmd(["docker", "exec", "slice-a", "pkill", "iperf3"])
+        _run_cmd(["docker", "exec", "slice-b", "pkill", "iperf3"])
+        
+        # Signal agents to stop
+        l2 = os.environ.get("LAPTOP2_IP", "127.0.0.1")
+        l3 = os.environ.get("LAPTOP3_IP", "127.0.0.1")
+        try:
+            _req.post(f"http://{l2}:9000/stop", timeout=3)
+            _req.post(f"http://{l3}:9001/stop", timeout=3)
+        except Exception:
+            pass
+            
+    except Exception as e:
+        log.error("Restore isolation failed: %s", e)
+    
     _breach_active = False
-
-    # ── Signal agents ──
-    l2 = os.environ.get("LAPTOP2_IP", "127.0.0.1")
-    l3 = os.environ.get("LAPTOP3_IP", "127.0.0.1")
-    _req.post(f"http://{l2}:9000/stop", timeout=3)
-    _req.post(f"http://{l3}:9001/stop", timeout=3)
     log.info("[demo] Isolation restored.")
 
 
@@ -874,6 +914,7 @@ def restore_page():
         return HTMLResponse(content=f.read())
 
 @app.post("/demo/inject")
+@app.post("/inject_attack")
 def inject_breach(background_tasks: BackgroundTasks, body: InjectRequest = Body(default=InjectRequest())):
     if _breach_active:
         return {"status": "already_active", "breach_active": True}
@@ -881,7 +922,8 @@ def inject_breach(background_tasks: BackgroundTasks, body: InjectRequest = Body(
     return {"status": "injected", "message": f"Breach started on {body.slice_id}. Watch dashboard in ~15s.", "breach_active": True}
 
 @app.post("/demo/restore")
-def restore_isolation(background_tasks: BackgroundTasks):
+@app.post("/restore_isolation")
+def restore_isolation_endpoint(background_tasks: BackgroundTasks):
     background_tasks.add_task(_do_restore_isolation)
     return {"status": "restoring", "message": "Isolation restoring. Recovery in 30-60s.", "breach_active": False}
 
