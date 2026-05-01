@@ -19,7 +19,7 @@ Both functions call the Groq API directly via requests.
 No extra SDK needed — uses the OpenAI-compatible Groq chat completions endpoint.
 
 Environment variables:
-    GROQ_API_KEY        — required (set in docker-compose.yml or .env)
+    GROQ_API_KEY        — required (set in .env, loaded via docker-compose env_file)
     AI_MODEL            — optional, defaults to llama-3.3-70b-versatile
     AI_FORECASTER_ROWS  — optional, rows fed to forecaster (default 50)
 """
@@ -34,10 +34,37 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_API_URL  = "https://api.groq.com/openai/v1/chat/completions"
-_MODEL    = os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
-_API_KEY  = os.environ.get("GROQ_API_KEY", "")
-_ROWS     = int(os.environ.get("AI_FORECASTER_ROWS", "50"))
+_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+# ── IMPORTANT: read env vars at CALL TIME, not import time ──────────────────
+# Module-level constants (e.g. _API_KEY = os.environ.get(...)) are evaluated
+# once when Python first imports this file. If the container env isn't fully
+# initialised yet, or if the module is imported before docker-compose injects
+# the env vars, the key will be permanently empty for the process lifetime.
+# Using helper functions forces a fresh os.environ lookup on every call.
+
+def _api_key() -> str:
+    return os.environ.get("GROQ_API_KEY", "").strip()
+
+def _model() -> str:
+    return os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
+
+def _max_rows() -> int:
+    return int(os.environ.get("AI_FORECASTER_ROWS", "50"))
+
+
+def _strip_fences(text: str) -> str:
+    """
+    Strip markdown code fences that LLMs sometimes wrap JSON in.
+    Handles ```json ... ```, ``` ... ```, and leading/trailing whitespace.
+    """
+    text = text.strip()
+    if text.startswith("```"):
+        # skip the opening fence line (e.g. ```json)
+        text = text[text.index("\n") + 1:] if "\n" in text else text[3:]
+    if text.endswith("```"):
+        text = text[: text.rfind("```")]
+    return text.strip()
 
 
 def _call_groq(system: str, user: str, max_tokens: int = 400) -> Optional[str]:
@@ -46,16 +73,19 @@ def _call_groq(system: str, user: str, max_tokens: int = 400) -> Optional[str]:
     Returns the text response, or None on any error.
     Never raises — the AI layer must never crash the core system.
     """
-    if not _API_KEY:
-        log.warning("[AI] GROQ_API_KEY not set — skipping AI call.")
+    key = _api_key()
+    if not key:
+        log.warning("[AI] GROQ_API_KEY not set — skipping AI call. "
+                    "Make sure it is in your .env file and docker-compose "
+                    "env_file points to it.")
         return None
 
     headers = {
-        "Authorization": f"Bearer {_API_KEY}",
+        "Authorization": f"Bearer {key}",
         "Content-Type":  "application/json",
     }
     body = {
-        "model":      _MODEL,
+        "model":      _model(),
         "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": system},
@@ -63,12 +93,23 @@ def _call_groq(system: str, user: str, max_tokens: int = 400) -> Optional[str]:
         ],
     }
     try:
-        resp = _req.post(_API_URL, headers=headers, json=body, timeout=20)
-        resp.raise_for_status()
+        log.info("[AI] Calling Groq API — model=%s max_tokens=%d", _model(), max_tokens)
+        resp = _req.post(_API_URL, headers=headers, json=body, timeout=30)
+
+        # Log the status so it's visible in docker logs
+        log.info("[AI] Groq response status: %d", resp.status_code)
+
+        if not resp.ok:
+            log.warning("[AI] Groq API error %d: %s", resp.status_code, resp.text[:300])
+            return None
+
         data = resp.json()
-        return data["choices"][0]["message"]["content"].strip()
+        content = data["choices"][0]["message"]["content"].strip()
+        log.info("[AI] Groq returned %d chars", len(content))
+        return content
+
     except _req.exceptions.Timeout:
-        log.warning("[AI] Groq API call timed out.")
+        log.warning("[AI] Groq API call timed out after 30s.")
         return None
     except Exception as exc:
         log.warning("[AI] Groq API call failed: %s", exc)
@@ -109,15 +150,6 @@ Rules:
 def predict_breach_risk(slice_id: str, history_rows: list[dict]) -> dict:
     """
     Analyze telemetry trajectory for a slice and return a risk prediction.
-
-    Args:
-        slice_id:     The slice being analyzed (e.g. "slice-a")
-        history_rows: Last N rows from /metrics/history (dicts, newest last)
-
-    Returns:
-        dict with keys: slice_id, risk_level, confidence_pct,
-                        features_of_concern, reasoning, recommended_action,
-                        ai_available (bool)
     """
     default = {
         "slice_id":            slice_id,
@@ -132,22 +164,22 @@ def predict_breach_risk(slice_id: str, history_rows: list[dict]) -> dict:
     if not history_rows:
         return default
 
-    # Feed only the columns the model needs — no internal ids
+    rows = _max_rows()
     trimmed = []
-    for r in history_rows[-_ROWS:]:
+    for r in history_rows[-rows:]:
         trimmed.append({
-            "timestamp":   r.get("timestamp"),
-            "cpu_pct":     round(float(r.get("cpu_pct", 0)), 2),
-            "mem_mb":      round(float(r.get("mem_mb", 0)), 2),
-            "net_rx_kb":   round(float(r.get("net_rx_kb", 0)), 2),
-            "net_tx_kb":   round(float(r.get("net_tx_kb", 0)), 2),
+            "timestamp":     r.get("timestamp"),
+            "cpu_pct":       round(float(r.get("cpu_pct", 0)), 2),
+            "mem_mb":        round(float(r.get("mem_mb", 0)), 2),
+            "net_rx_kb":     round(float(r.get("net_rx_kb", 0)), 2),
+            "net_tx_kb":     round(float(r.get("net_tx_kb", 0)), 2),
             "anomaly_score": r.get("anomaly_score"),
         })
 
     user_msg = (
         f"Slice ID: {slice_id}\n"
         f"Sample count: {len(trimmed)}\n"
-        f"Telemetry (oldest → newest):\n"
+        f"Telemetry (oldest \u2192 newest):\n"
         f"{json.dumps(trimmed, separators=(',', ':'))}"
     )
 
@@ -156,7 +188,7 @@ def predict_breach_risk(slice_id: str, history_rows: list[dict]) -> dict:
         return default
 
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(_strip_fences(raw))
         return {
             "slice_id":            slice_id,
             "risk_level":          parsed.get("risk_level", "stable"),
@@ -167,7 +199,7 @@ def predict_breach_risk(slice_id: str, history_rows: list[dict]) -> dict:
             "ai_available":        True,
         }
     except (json.JSONDecodeError, ValueError) as exc:
-        log.warning("[AI] Forecaster JSON parse error: %s | raw=%s", exc, raw[:200])
+        log.warning("[AI] Forecaster JSON parse error: %s | raw=%s", exc, raw[:300])
         return default
 
 
@@ -203,13 +235,7 @@ Rules:
 def reason_about_incident(incident: dict, telemetry_window: list[dict]) -> Optional[str]:
     """
     Generate a forensic note for a closed incident.
-
-    Args:
-        incident:         The incident record dict (from /incidents)
-        telemetry_window: Up to 30 rows of metrics around the breach window
-
-    Returns:
-        JSON string to store as ai_forensic_note, or None on failure.
+    Returns a clean JSON string to store as ai_forensic_note, or None on failure.
     """
     if not incident:
         return None
@@ -235,10 +261,11 @@ def reason_about_incident(incident: dict, telemetry_window: list[dict]) -> Optio
     if not raw:
         return None
 
-    # Validate it's parseable JSON before storing
+    # Strip markdown fences then validate before storing
     try:
-        json.loads(raw)
-        return raw
+        cleaned = _strip_fences(raw)
+        json.loads(cleaned)   # validate — raises if not real JSON
+        return cleaned
     except json.JSONDecodeError:
-        log.warning("[AI] Reasoner returned non-JSON: %s", raw[:200])
+        log.warning("[AI] Reasoner returned non-JSON after fence strip. raw=%s", raw[:300])
         return None

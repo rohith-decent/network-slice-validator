@@ -250,11 +250,10 @@ def fetch_ai_forecast(slice_id: str) -> dict:
         return {"risk_level": "stable", "ai_available": False, "reasoning": "AI layer unavailable."}
 
 
-@st.cache_data(ttl=60, show_spinner=False)
 def fetch_ai_incident_note(incident_id: int) -> dict:
-    """Fetch or generate AI forensic note for a closed incident."""
+    """Fetch or generate AI forensic note for a closed incident. Not cached — note is generated once."""
     try:
-        r = requests.get(f"{API_BASE}/ai/incident/{incident_id}/reason", timeout=25)
+        r = requests.get(f"{API_BASE}/ai/incident/{incident_id}/reason", timeout=30)
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -337,43 +336,39 @@ def render_ai_forecast_panel(selected_slices: list[str]):
             with st.spinner(f"Analyzing {name}…"):
                 forecast = fetch_ai_forecast(name)
 
+            import html as _html
             risk      = forecast.get("risk_level", "stable")
             cfg       = _RISK_CONFIG.get(risk, _RISK_CONFIG["stable"])
             conf_pct  = forecast.get("confidence_pct", 0)
-            reasoning = forecast.get("reasoning", "")
-            action    = forecast.get("recommended_action", "")
+            # Escape AI-generated text to prevent broken HTML rendering
+            reasoning = _html.escape(forecast.get("reasoning", ""))
+            action    = _html.escape(forecast.get("recommended_action", ""))
             concerns  = forecast.get("features_of_concern", [])
             available = forecast.get("ai_available", False)
 
             concern_tags = " ".join(
                 f'<span style="background:#1f2937;color:#9ca3af;padding:1px 6px;'
-                f'border-radius:8px;font-size:0.70rem;">{c}</span>'
+                f'border-radius:8px;font-size:0.70rem;">{_html.escape(str(c))}</span>'
                 for c in concerns
             ) if concerns else ""
 
+            concern_row = f'<div style="margin-bottom:6px;">{concern_tags}</div>' if concern_tags else ""
             st.markdown(
-                f"""
-                <div style="background:{cfg['bg']};border:1px solid {cfg['border']};
-                            border-radius:10px;padding:14px 16px;margin-bottom:8px;">
-                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-                        <span style="font-size:1.4rem;">{cfg['icon']}</span>
-                        <span style="color:{cfg['color']};font-weight:700;font-size:1rem;
-                                     letter-spacing:0.05em;">
-                            {name} — BREACH RISK: {cfg['label']}
-                        </span>
-                        <span style="color:#8b949e;font-size:0.78rem;margin-left:auto;">
-                            AI confidence: {conf_pct}%
-                        </span>
-                    </div>
-                    {f'<div style="margin-bottom:6px;">{concern_tags}</div>' if concern_tags else ''}
-                    <div style="color:#c9d1d9;font-size:0.83rem;line-height:1.5;margin-bottom:6px;">
-                        {reasoning}
-                    </div>
-                    <div style="color:#8b949e;font-size:0.78rem;font-style:italic;">
-                        ▶ {action}
-                    </div>
-                </div>
-                """,
+                f'<div style="background:{cfg["bg"]};border:1px solid {cfg["border"]};'
+                f'border-radius:10px;padding:14px 16px;margin-bottom:8px;">'
+                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">'
+                f'<span style="font-size:1.4rem;">{cfg["icon"]}</span>'
+                f'<span style="color:{cfg["color"]};font-weight:700;font-size:1rem;'
+                f'letter-spacing:0.05em;">{_html.escape(name)} — BREACH RISK: {cfg["label"]}</span>'
+                f'<span style="color:#8b949e;font-size:0.78rem;margin-left:auto;">'
+                f'AI confidence: {conf_pct}%</span>'
+                f'</div>'
+                f'{concern_row}'
+                f'<div style="color:#c9d1d9;font-size:0.83rem;line-height:1.5;margin-bottom:6px;">'
+                f'{reasoning}</div>'
+                f'<div style="color:#8b949e;font-size:0.78rem;font-style:italic;">'
+                f'&#9654; {action}</div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
@@ -1004,7 +999,6 @@ def page_live_monitor(refresh_rate: int, history_len: int, selected_slices: list
                 )
 
     # ── AI Predictive Forecaster ──────────────────────────────────────────────
-    st.markdown("### 🤖 AI Prediction")
     render_ai_forecast_panel(selected_slices)
     st.divider()
     st.markdown("### Current Metrics")
@@ -1283,13 +1277,16 @@ def page_audit_log(selected_slices: list[str]):
                             st.text(str(ai_note_raw))
                     else:
                         if st.button(f"Generate AI forensic note", key=f"ai_gen_{inc_id}"):
-                            with st.spinner("Asking Claude to reason about this incident…"):
+                            with st.spinner("Asking AI to reason about this incident…"):
                                 result = fetch_ai_incident_note(inc_id)
-                            if result.get("note"):
-                                st.success("Forensic note generated — reload the page to see it.")
+                            note_data = result.get("note")
+                            if note_data:
+                                # Clear incident cache so the rerun picks up the new note
+                                fetch_incidents.clear()
+                                st.success("Forensic note generated — loading now…")
                                 st.rerun()
                             else:
-                                st.error("AI layer returned no result. Check GROQ_API_KEY.")
+                                st.error("AI layer returned no result. Check GROQ_API_KEY and logs.")
 
     st.divider()
 

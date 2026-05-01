@@ -231,13 +231,30 @@ def classify_attack(features: dict, bundle: dict) -> Optional[str]:
 
     elevated = [name for name, z in z_scores.items() if z > 3.0]
 
-    if len(elevated) >= 2:
+    # Combined Attack requires 3+ features simultaneously elevated.
+    # With 2 elevated features we pick the dominant one (highest Z-score)
+    # to avoid misclassifying single-vector attacks that have a minor
+    # secondary spike (e.g. CPU spike causes a tiny memory uptick).
+    if len(elevated) >= 3:
         return "Combined Attack"
-    if "cpu_pct" in elevated:
+
+    # Determine primary feature by highest absolute Z-score
+    if elevated:
+        dominant = max(elevated, key=lambda n: z_scores[n])
+        if dominant == "cpu_pct":
+            return "CPU Starvation"
+        if dominant == "mem_mb":
+            return "Memory Exhaustion"
+        if dominant in ("net_rx_kb", "net_tx_kb"):
+            return "Network Breach"
+
+    # Fallback: even if no feature cleared Z>3, check which is most elevated
+    dominant = max(FEATURE_NAMES, key=lambda n: z_scores.get(n, 0))
+    if dominant == "cpu_pct":
         return "CPU Starvation"
-    if "mem_mb" in elevated:
+    if dominant == "mem_mb":
         return "Memory Exhaustion"
-    if "net_rx_kb" in elevated or "net_tx_kb" in elevated:
+    if dominant in ("net_rx_kb", "net_tx_kb"):
         return "Network Breach"
     return "Unknown Anomaly"
 
@@ -469,21 +486,26 @@ async def drift_detector_loop():
 # ── Attack injection profiles ─────────────────────────────────────────────────
 
 ATTACK_PROFILES = {
+    # CPU Starvation: only cpu_pct spikes. Memory and network stay near Alpine idle.
+    # Alpine idle baseline: cpu~0.5%, mem~3MB, net~0 KB/s
     "cpu": {
         "cpu_pct":   lambda: float(np.random.uniform(85, 99)),
-        "mem_mb":    lambda: float(np.random.uniform(35, 55)),
-        "net_rx_kb": lambda: float(np.random.uniform(0.5, 2.0)),
-        "net_tx_kb": lambda: float(np.random.uniform(0.3, 1.5)),
+        "mem_mb":    lambda: float(np.random.uniform(2.0, 5.0)),   # near-idle
+        "net_rx_kb": lambda: float(np.random.uniform(0.0, 0.5)),   # near-idle
+        "net_tx_kb": lambda: float(np.random.uniform(0.0, 0.3)),   # near-idle
     },
+    # Memory Exhaustion: only mem_mb spikes. CPU stays low (no compute work).
     "memory": {
-        "cpu_pct":   lambda: float(np.random.uniform(5, 18)),
+        "cpu_pct":   lambda: float(np.random.uniform(0.5, 3.0)),   # near-idle
         "mem_mb":    lambda: float(np.random.uniform(110, 128)),
-        "net_rx_kb": lambda: float(np.random.uniform(0.5, 2.0)),
-        "net_tx_kb": lambda: float(np.random.uniform(0.3, 1.5)),
+        "net_rx_kb": lambda: float(np.random.uniform(0.0, 0.5)),   # near-idle
+        "net_tx_kb": lambda: float(np.random.uniform(0.0, 0.3)),   # near-idle
     },
+    # Network Breach: only net_rx/tx spike (cross-slice ping flood).
+    # CPU tick from ping is minimal; memory is unaffected.
     "network_breach": {
-        "cpu_pct":   lambda: float(np.random.uniform(10, 30)),
-        "mem_mb":    lambda: float(np.random.uniform(40, 70)),
+        "cpu_pct":   lambda: float(np.random.uniform(0.5, 3.0)),   # near-idle
+        "mem_mb":    lambda: float(np.random.uniform(2.0, 5.0)),   # near-idle
         "net_rx_kb": lambda: float(np.random.uniform(800, 2000)),
         "net_tx_kb": lambda: float(np.random.uniform(600, 1800)),
     },
