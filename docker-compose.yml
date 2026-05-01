@@ -69,8 +69,6 @@ services:
       - SLICE_NAMES=slice-a,slice-b
       - LOG_LEVEL=INFO
       # ── AI Layer ─────────────────────────────────────────────────────
-      # Paste your Groq key directly here (get one free at console.groq.com):
-      - GROQ_API_KEY=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
       - AI_MODEL=llama-3.3-70b-versatile
       - AI_FORECASTER_ROWS=50
     volumes:
