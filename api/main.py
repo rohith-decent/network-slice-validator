@@ -21,6 +21,11 @@ Endpoints (all original preserved + new):
   GET  /model/status             – Capstone 4: model age, drift rate, retrain log
   POST /exfil/ingest             – ingest cross-process exfiltration data
   GET  /exfil/latest             – view latest exfiltrated payloads
+
+  ── AI Layer (arm's-length, read-only) ──────────────────────────────────────
+  GET  /ai/forecast              – Predictive breach risk for a slice (Feature A)
+  GET  /ai/incident/{id}/reason  – Forensic hypothesis for a closed incident (Feature B)
+  GET  /ai/status                – Whether AI key is configured
 """
 
 import io
@@ -111,7 +116,8 @@ def get_db() -> sqlite3.Connection:
             peak_score     REAL,
             min_confidence REAL,
             duration_s     REAL,
-            is_active      INTEGER DEFAULT 1
+            is_active      INTEGER DEFAULT 1,
+            ai_forensic_note TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_inc_slice ON incidents(slice_id, started_at);
         CREATE TABLE IF NOT EXISTS drift_config (
@@ -119,6 +125,12 @@ def get_db() -> sqlite3.Connection:
             value TEXT
         );
     """)
+    # Migrate existing incidents table if ai_forensic_note column is missing
+    try:
+        conn.execute("ALTER TABLE incidents ADD COLUMN ai_forensic_note TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.commit()
     return conn
 
@@ -219,13 +231,30 @@ def classify_attack(features: dict, bundle: dict) -> Optional[str]:
 
     elevated = [name for name, z in z_scores.items() if z > 3.0]
 
-    if len(elevated) >= 2:
+    # Combined Attack requires 3+ features simultaneously elevated.
+    # With 2 elevated features we pick the dominant one (highest Z-score)
+    # to avoid misclassifying single-vector attacks that have a minor
+    # secondary spike (e.g. CPU spike causes a tiny memory uptick).
+    if len(elevated) >= 3:
         return "Combined Attack"
-    if "cpu_pct" in elevated:
+
+    # Determine primary feature by highest absolute Z-score
+    if elevated:
+        dominant = max(elevated, key=lambda n: z_scores[n])
+        if dominant == "cpu_pct":
+            return "CPU Starvation"
+        if dominant == "mem_mb":
+            return "Memory Exhaustion"
+        if dominant in ("net_rx_kb", "net_tx_kb"):
+            return "Network Breach"
+
+    # Fallback: even if no feature cleared Z>3, check which is most elevated
+    dominant = max(FEATURE_NAMES, key=lambda n: z_scores.get(n, 0))
+    if dominant == "cpu_pct":
         return "CPU Starvation"
-    if "mem_mb" in elevated:
+    if dominant == "mem_mb":
         return "Memory Exhaustion"
-    if "net_rx_kb" in elevated or "net_tx_kb" in elevated:
+    if dominant in ("net_rx_kb", "net_tx_kb"):
         return "Network Breach"
     return "Unknown Anomaly"
 
@@ -361,6 +390,50 @@ def _correlate_slice(conn: sqlite3.Connection, slice_id: str):
             duration,
         )
 
+        # ── AI Incident Reasoner (runs in background thread, never blocks) ──
+        def _run_ai_reasoner(inc_id: int, sid: str, started: float):
+            try:
+                from ai.layer import reason_about_incident
+                # Fetch the closed incident record
+                _conn = get_db()
+                inc_row = _conn.execute(
+                    "SELECT * FROM incidents WHERE id=?", (inc_id,)
+                ).fetchone()
+                if not inc_row:
+                    _conn.close()
+                    return
+                inc_dict = dict(inc_row)
+                # Fetch telemetry window: 30 rows around the breach
+                window_rows = _conn.execute(
+                    "SELECT timestamp, cpu_pct, mem_mb, net_rx_kb, net_tx_kb, anomaly_score "
+                    "FROM metrics WHERE slice_id=? AND timestamp >= ? AND timestamp <= ? "
+                    "ORDER BY timestamp ASC LIMIT 30",
+                    (sid, started - 30, now + 5)
+                ).fetchall()
+                telemetry = [dict(r) for r in window_rows]
+                _conn.close()
+
+                note = reason_about_incident(inc_dict, telemetry)
+                if note:
+                    _conn2 = get_db()
+                    _conn2.execute(
+                        "UPDATE incidents SET ai_forensic_note=? WHERE id=?",
+                        (note, inc_id)
+                    )
+                    _conn2.commit()
+                    _conn2.close()
+                    log.info("[AI] Forensic note written for incident %d (%s)", inc_id, sid)
+            except Exception as exc:
+                log.warning("[AI] Reasoner background error: %s", exc)
+
+        import threading
+        t = threading.Thread(
+            target=_run_ai_reasoner,
+            args=(active["id"], slice_id, active["started_at"]),
+            daemon=True,
+        )
+        t.start()
+
 
 # ── Drift detector (Capstone 4) ───────────────────────────────────────────────
 
@@ -413,21 +486,26 @@ async def drift_detector_loop():
 # ── Attack injection profiles ─────────────────────────────────────────────────
 
 ATTACK_PROFILES = {
+    # CPU Starvation: only cpu_pct spikes. Memory and network stay near Alpine idle.
+    # Alpine idle baseline: cpu~0.5%, mem~3MB, net~0 KB/s
     "cpu": {
         "cpu_pct":   lambda: float(np.random.uniform(85, 99)),
-        "mem_mb":    lambda: float(np.random.uniform(35, 55)),
-        "net_rx_kb": lambda: float(np.random.uniform(0.5, 2.0)),
-        "net_tx_kb": lambda: float(np.random.uniform(0.3, 1.5)),
+        "mem_mb":    lambda: float(np.random.uniform(2.0, 5.0)),   # near-idle
+        "net_rx_kb": lambda: float(np.random.uniform(0.0, 0.5)),   # near-idle
+        "net_tx_kb": lambda: float(np.random.uniform(0.0, 0.3)),   # near-idle
     },
+    # Memory Exhaustion: only mem_mb spikes. CPU stays low (no compute work).
     "memory": {
-        "cpu_pct":   lambda: float(np.random.uniform(5, 18)),
+        "cpu_pct":   lambda: float(np.random.uniform(0.5, 3.0)),   # near-idle
         "mem_mb":    lambda: float(np.random.uniform(110, 128)),
-        "net_rx_kb": lambda: float(np.random.uniform(0.5, 2.0)),
-        "net_tx_kb": lambda: float(np.random.uniform(0.3, 1.5)),
+        "net_rx_kb": lambda: float(np.random.uniform(0.0, 0.5)),   # near-idle
+        "net_tx_kb": lambda: float(np.random.uniform(0.0, 0.3)),   # near-idle
     },
+    # Network Breach: only net_rx/tx spike (cross-slice ping flood).
+    # CPU tick from ping is minimal; memory is unaffected.
     "network_breach": {
-        "cpu_pct":   lambda: float(np.random.uniform(10, 30)),
-        "mem_mb":    lambda: float(np.random.uniform(40, 70)),
+        "cpu_pct":   lambda: float(np.random.uniform(0.5, 3.0)),   # near-idle
+        "mem_mb":    lambda: float(np.random.uniform(2.0, 5.0)),   # near-idle
         "net_rx_kb": lambda: float(np.random.uniform(800, 2000)),
         "net_tx_kb": lambda: float(np.random.uniform(600, 1800)),
     },
@@ -789,6 +867,23 @@ async def injection_status():
 def get_incidents(limit: int = Query(50, ge=1, le=500)):
     sb_rows = _sb_fetch_incidents(limit)
     if sb_rows:
+        # Supabase rows don't have ai_forensic_note (column added locally to SQLite).
+        # Merge it in from SQLite so the dashboard can display generated notes.
+        try:
+            conn = get_db()
+            # Build a lookup: incident id → ai_forensic_note from SQLite
+            sqlite_notes = {}
+            for r in conn.execute("SELECT id, ai_forensic_note FROM incidents").fetchall():
+                if r["ai_forensic_note"]:
+                    sqlite_notes[r["id"]] = r["ai_forensic_note"]
+            conn.close()
+            if sqlite_notes:
+                for row in sb_rows:
+                    inc_id = row.get("id")
+                    if inc_id and inc_id in sqlite_notes:
+                        row["ai_forensic_note"] = sqlite_notes[inc_id]
+        except Exception:
+            pass  # never break the incidents list over a note merge
         return sb_rows
     conn = get_db()
     rows = conn.execute(
@@ -982,4 +1077,132 @@ def model_status():
         "drift_strikes":       _drift_strikes,
         "drift_threshold":     DRIFT_THRESHOLD,
         "last_retrain":        last_retrain[0] if last_retrain else None,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AI LAYER ENDPOINTS  (arm's-length — read-only data, returns text/JSON only)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/ai/status")
+def ai_status():
+    """Check whether the AI layer is configured and ready."""
+    import os as _os
+    key_set = bool(_os.environ.get("GROQ_API_KEY", ""))
+    return {
+        "ai_available":  key_set,
+        "model":         _os.environ.get("AI_MODEL", "llama-3.3-70b-versatile"),
+        "forecaster_rows": int(_os.environ.get("AI_FORECASTER_ROWS", "50")),
+        "message": (
+            "AI layer active — predictive forecasting and incident reasoning enabled."
+            if key_set else
+            "GROQ_API_KEY not set. Add it to docker-compose.yml or .env."
+        ),
+    }
+
+
+@app.get("/ai/forecast")
+def ai_forecast(
+    slice_id: str = Query(..., description="Slice to analyze, e.g. slice-a"),
+    limit:    int = Query(50, ge=10, le=100),
+):
+    """
+    Predictive breach forecaster (AI Feature A).
+
+    Reads the last `limit` telemetry rows for the slice and asks Claude
+    to reason about whether a breach is trending. Returns a risk_level
+    of stable | rising | critical BEFORE the IsolationForest fires.
+
+    The AI never touches the database directly — this endpoint reads
+    /metrics/history data and passes it as a JSON payload to the API.
+    """
+    try:
+        from ai.layer import predict_breach_risk
+    except ImportError as exc:
+        raise HTTPException(500, f"AI layer not installed: {exc}")
+
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT timestamp, cpu_pct, mem_mb, net_rx_kb, net_tx_kb, anomaly_score "
+        "FROM metrics WHERE slice_id=? ORDER BY timestamp DESC LIMIT ?",
+        (slice_id, limit),
+    ).fetchall()
+    conn.close()
+
+    history = list(reversed([dict(r) for r in rows]))  # oldest → newest
+    result  = predict_breach_risk(slice_id, history)
+    return result
+
+
+@app.get("/ai/incident/{incident_id}/reason")
+def ai_incident_reason(incident_id: int):
+    """
+    Autonomous incident reasoner (AI Feature B).
+
+    Fetches a closed incident by ID, loads the telemetry window around
+    the breach, and returns (or triggers generation of) an AI forensic
+    hypothesis. If the note already exists in the DB it is returned
+    immediately. If not, it is generated on-demand and cached.
+
+    The AI never modifies core system state — only writes ai_forensic_note
+    to the incidents table.
+    """
+    try:
+        from ai.layer import reason_about_incident
+    except ImportError as exc:
+        raise HTTPException(500, f"AI layer not installed: {exc}")
+
+    conn = get_db()
+    inc_row = conn.execute(
+        "SELECT * FROM incidents WHERE id=?", (incident_id,)
+    ).fetchone()
+
+    if not inc_row:
+        conn.close()
+        raise HTTPException(404, f"Incident {incident_id} not found.")
+
+    inc = dict(inc_row)
+
+    # Return cached note if already generated
+    if inc.get("ai_forensic_note"):
+        conn.close()
+        import json as _json
+        try:
+            return {"incident_id": incident_id, "note": _json.loads(inc["ai_forensic_note"]), "cached": True}
+        except Exception:
+            return {"incident_id": incident_id, "note": inc["ai_forensic_note"], "cached": True}
+
+    # Generate on-demand for open incidents or ones that missed the auto-trigger
+    started = inc.get("started_at", 0)
+    ended   = inc.get("resolved_at") or time.time()
+
+    window_rows = conn.execute(
+        "SELECT timestamp, cpu_pct, mem_mb, net_rx_kb, net_tx_kb, anomaly_score "
+        "FROM metrics WHERE slice_id=? AND timestamp >= ? AND timestamp <= ? "
+        "ORDER BY timestamp ASC LIMIT 30",
+        (inc["slice_id"], started - 30, ended + 5)
+    ).fetchall()
+    telemetry = [dict(r) for r in window_rows]
+
+    note = reason_about_incident(inc, telemetry)
+
+    if note:
+        conn.execute(
+            "UPDATE incidents SET ai_forensic_note=? WHERE id=?",
+            (note, incident_id)
+        )
+        conn.commit()
+
+    conn.close()
+
+    import json as _json
+    try:
+        parsed = _json.loads(note) if note else None
+    except Exception:
+        parsed = note
+
+    return {
+        "incident_id": incident_id,
+        "note":        parsed,
+        "cached":      False,
     }

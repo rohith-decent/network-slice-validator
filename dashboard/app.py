@@ -233,6 +233,43 @@ def fetch_injection_status() -> list[str]:
         return []
 
 
+# ── AI Layer fetch helpers ─────────────────────────────────────────────────────
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_ai_forecast(slice_id: str) -> dict:
+    """Fetch predictive breach risk from AI layer. 60s cache to reduce Groq API load."""
+    try:
+        r = requests.get(
+            f"{API_BASE}/ai/forecast",
+            params={"slice_id": slice_id, "limit": 50},
+            timeout=25,  # AI call can take up to 20s
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return {"risk_level": "stable", "ai_available": False, "reasoning": "AI layer unavailable."}
+
+
+def fetch_ai_incident_note(incident_id: int) -> dict:
+    """Fetch or generate AI forensic note for a closed incident. Not cached — note is generated once."""
+    try:
+        r = requests.get(f"{API_BASE}/ai/incident/{incident_id}/reason", timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_ai_status() -> dict:
+    try:
+        r = requests.get(f"{API_BASE}/ai/status", timeout=3)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return {"ai_available": False}
+
+
 # ── Attack badge ───────────────────────────────────────────────────────────────
 
 ATTACK_BADGE: dict[str, tuple[str, str, str]] = {
@@ -263,6 +300,80 @@ def confidence_color(val: float | None) -> str:
     elif val >= 40:
         return "#d29922"
     return "#f85149"
+
+
+# ── AI Predictive Panel ────────────────────────────────────────────────────────
+
+_RISK_CONFIG = {
+    "stable":   {"icon": "🟢", "label": "STABLE",   "color": "#3fb950", "bg": "#0d1a0d", "border": "#3fb950"},
+    "rising":   {"icon": "🟡", "label": "RISING",   "color": "#d29922", "bg": "#1a1400", "border": "#d29922"},
+    "critical": {"icon": "🔴", "label": "CRITICAL", "color": "#f85149", "bg": "#2d1117", "border": "#f85149"},
+}
+
+
+def render_ai_forecast_panel(selected_slices: list[str]):
+    """
+    Renders the AI Predictive Breach Forecaster panel.
+    Sits above the IsolationForest gauge — fires BEFORE the gauge drops.
+    """
+    ai_status = fetch_ai_status()
+    if not ai_status.get("ai_available"):
+        st.info(
+            "🤖 AI Forecaster offline — set `GROQ_API_KEY` in your `.env` file to enable predictive breach warnings.",
+            icon="ℹ️",
+        )
+        return
+
+    st.markdown("### 🤖 AI Predictive Breach Forecaster")
+    st.caption(
+        "Claude analyzes the last 50 telemetry samples and predicts trajectory "
+        "— fires **before** the IsolationForest gauge drops."
+    )
+
+    forecast_cols = st.columns(len(selected_slices))
+    for i, name in enumerate(selected_slices):
+        with forecast_cols[i]:
+            with st.spinner(f"Analyzing {name}…"):
+                forecast = fetch_ai_forecast(name)
+
+            import html as _html
+            risk      = forecast.get("risk_level", "stable")
+            cfg       = _RISK_CONFIG.get(risk, _RISK_CONFIG["stable"])
+            conf_pct  = forecast.get("confidence_pct", 0)
+            # Escape AI-generated text to prevent broken HTML rendering
+            reasoning = _html.escape(forecast.get("reasoning", ""))
+            action    = _html.escape(forecast.get("recommended_action", ""))
+            concerns  = forecast.get("features_of_concern", [])
+            available = forecast.get("ai_available", False)
+
+            concern_tags = " ".join(
+                f'<span style="background:#1f2937;color:#9ca3af;padding:1px 6px;'
+                f'border-radius:8px;font-size:0.70rem;">{_html.escape(str(c))}</span>'
+                for c in concerns
+            ) if concerns else ""
+
+            concern_row = f'<div style="margin-bottom:6px;">{concern_tags}</div>' if concern_tags else ""
+            st.markdown(
+                f'<div style="background:{cfg["bg"]};border:1px solid {cfg["border"]};'
+                f'border-radius:10px;padding:14px 16px;margin-bottom:8px;">'
+                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">'
+                f'<span style="font-size:1.4rem;">{cfg["icon"]}</span>'
+                f'<span style="color:{cfg["color"]};font-weight:700;font-size:1rem;'
+                f'letter-spacing:0.05em;">{_html.escape(name)} — BREACH RISK: {cfg["label"]}</span>'
+                f'<span style="color:#8b949e;font-size:0.78rem;margin-left:auto;">'
+                f'AI confidence: {conf_pct}%</span>'
+                f'</div>'
+                f'{concern_row}'
+                f'<div style="color:#c9d1d9;font-size:0.83rem;line-height:1.5;margin-bottom:6px;">'
+                f'{reasoning}</div>'
+                f'<div style="color:#8b949e;font-size:0.78rem;font-style:italic;">'
+                f'&#9654; {action}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            if not available:
+                st.caption("⏳ AI call in progress or rate-limited — will update within 60s.")
 
 
 # ── Gauge chart ────────────────────────────────────────────────────────────────
@@ -890,6 +1001,9 @@ def page_live_monitor(refresh_rate: int, history_len: int, selected_slices: list
                     unsafe_allow_html=True,
                 )
 
+    # ── AI Predictive Forecaster ──────────────────────────────────────────────
+    render_ai_forecast_panel(selected_slices)
+    st.divider()
     st.markdown("### Current Metrics")
     card_cols = st.columns(len(selected_slices) * 4)
     for i, name in enumerate(selected_slices):
@@ -1147,6 +1261,45 @@ def page_audit_log(selected_slices: list[str]):
                 f'</div>',
                 unsafe_allow_html=True,
             )
+            # ── AI Forensic Note ──────────────────────────────────────────
+            inc_id = inc.get("id")
+            # ai_forensic_note may come from the incidents list (SQLite path)
+            # OR from session_state (set immediately after generation, covers Supabase path
+            # where the incidents list rows don't carry ai_forensic_note)
+            ai_note_raw = inc.get("ai_forensic_note") or st.session_state.get(f"ai_note_{inc_id}")
+            if not is_act and inc_id:
+                with st.expander(f"🤖 AI Forensic Analysis — incident #{inc_id}", expanded=False):
+                    if ai_note_raw:
+                        import json as _json
+                        try:
+                            note = _json.loads(ai_note_raw) if isinstance(ai_note_raw, str) else ai_note_raw
+                            nc1, nc2 = st.columns(2)
+                            nc1.markdown(f"**Attack vector:** `{note.get('attack_vector','?')}`")
+                            nc2.markdown(f"**Severity:** `{note.get('severity','?')}` | **Confidence:** `{note.get('confidence','?')}`")
+                            st.markdown(f"**Hypothesis:** {note.get('hypothesis','')}")
+                            st.markdown(f"**Pre-breach signal:** {note.get('pre_breach_signal','')}")
+                            st.info(f"▶ **Recommended action:** {note.get('recommended_action','')}")
+                        except Exception:
+                            st.text(str(ai_note_raw))
+                    else:
+                        err_key = f"ai_gen_err_{inc_id}"
+                        if st.button(f"Generate AI forensic note", key=f"ai_gen_{inc_id}"):
+                            st.session_state.pop(err_key, None)
+                            with st.spinner("Asking AI to reason about this incident…"):
+                                result = fetch_ai_incident_note(inc_id)
+                            note_data = result.get("note")
+                            if note_data:
+                                import json as _json2
+                                # Store note in session_state immediately — works even if
+                                # Supabase rows don't carry ai_forensic_note back from /incidents
+                                raw_str = _json2.dumps(note_data) if isinstance(note_data, dict) else str(note_data)
+                                st.session_state[f"ai_note_{inc_id}"] = raw_str
+                                fetch_incidents.clear()
+                                st.rerun()
+                            else:
+                                st.session_state[err_key] = True
+                        if st.session_state.get(err_key):
+                            st.error("AI layer returned no result. Check GROQ_API_KEY and logs.")
 
     st.divider()
 

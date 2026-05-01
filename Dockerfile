@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Application Directories ────────────────────────────────────────
-RUN mkdir -p /app /data /ml /app/collector /app/ml /app/api /app/dashboard /app/sb
+RUN mkdir -p /app /data /ml /app/collector /app/ml /app/api /app/dashboard /app/sb /app/ai
 
 # ── Working Directory ──────────────────────────────────────────────
 WORKDIR /app
@@ -31,6 +31,7 @@ COPY ml/         /app/ml/
 COPY api/        /app/api/
 COPY dashboard/  /app/dashboard/
 COPY sb/         /app/sb/
+COPY ai/         /app/ai/
 COPY entrypoint.sh /app/entrypoint.sh
 
 RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
