@@ -235,9 +235,9 @@ def fetch_injection_status() -> list[str]:
 
 # ── AI Layer fetch helpers ─────────────────────────────────────────────────────
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_ai_forecast(slice_id: str) -> dict:
-    """Fetch predictive breach risk from AI layer. 30s cache to avoid hammering API."""
+    """Fetch predictive breach risk from AI layer. 60s cache to reduce Groq API load."""
     try:
         r = requests.get(
             f"{API_BASE}/ai/forecast",
@@ -373,7 +373,7 @@ def render_ai_forecast_panel(selected_slices: list[str]):
             )
 
             if not available:
-                st.caption("⚠️ AI layer returned no result — check API key and logs.")
+                st.caption("⏳ AI call in progress or rate-limited — will update within 60s.")
 
 
 # ── Gauge chart ────────────────────────────────────────────────────────────────
@@ -1260,7 +1260,10 @@ def page_audit_log(selected_slices: list[str]):
             )
             # ── AI Forensic Note ──────────────────────────────────────────
             inc_id = inc.get("id")
-            ai_note_raw = inc.get("ai_forensic_note")
+            # ai_forensic_note may come from the incidents list (SQLite path)
+            # OR from session_state (set immediately after generation, covers Supabase path
+            # where the incidents list rows don't carry ai_forensic_note)
+            ai_note_raw = inc.get("ai_forensic_note") or st.session_state.get(f"ai_note_{inc_id}")
             if not is_act and inc_id:
                 with st.expander(f"🤖 AI Forensic Analysis — incident #{inc_id}", expanded=False):
                     if ai_note_raw:
@@ -1276,17 +1279,24 @@ def page_audit_log(selected_slices: list[str]):
                         except Exception:
                             st.text(str(ai_note_raw))
                     else:
+                        err_key = f"ai_gen_err_{inc_id}"
                         if st.button(f"Generate AI forensic note", key=f"ai_gen_{inc_id}"):
+                            st.session_state.pop(err_key, None)
                             with st.spinner("Asking AI to reason about this incident…"):
                                 result = fetch_ai_incident_note(inc_id)
                             note_data = result.get("note")
                             if note_data:
-                                # Clear incident cache so the rerun picks up the new note
+                                import json as _json2
+                                # Store note in session_state immediately — works even if
+                                # Supabase rows don't carry ai_forensic_note back from /incidents
+                                raw_str = _json2.dumps(note_data) if isinstance(note_data, dict) else str(note_data)
+                                st.session_state[f"ai_note_{inc_id}"] = raw_str
                                 fetch_incidents.clear()
-                                st.success("Forensic note generated — loading now…")
                                 st.rerun()
                             else:
-                                st.error("AI layer returned no result. Check GROQ_API_KEY and logs.")
+                                st.session_state[err_key] = True
+                        if st.session_state.get(err_key):
+                            st.error("AI layer returned no result. Check GROQ_API_KEY and logs.")
 
     st.divider()
 

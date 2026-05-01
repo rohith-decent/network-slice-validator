@@ -867,6 +867,23 @@ async def injection_status():
 def get_incidents(limit: int = Query(50, ge=1, le=500)):
     sb_rows = _sb_fetch_incidents(limit)
     if sb_rows:
+        # Supabase rows don't have ai_forensic_note (column added locally to SQLite).
+        # Merge it in from SQLite so the dashboard can display generated notes.
+        try:
+            conn = get_db()
+            # Build a lookup: incident id → ai_forensic_note from SQLite
+            sqlite_notes = {}
+            for r in conn.execute("SELECT id, ai_forensic_note FROM incidents").fetchall():
+                if r["ai_forensic_note"]:
+                    sqlite_notes[r["id"]] = r["ai_forensic_note"]
+            conn.close()
+            if sqlite_notes:
+                for row in sb_rows:
+                    inc_id = row.get("id")
+                    if inc_id and inc_id in sqlite_notes:
+                        row["ai_forensic_note"] = sqlite_notes[inc_id]
+        except Exception:
+            pass  # never break the incidents list over a note merge
         return sb_rows
     conn = get_db()
     rows = conn.execute(

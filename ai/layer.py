@@ -57,6 +57,7 @@ def _strip_fences(text: str) -> str:
     """
     Strip markdown code fences that LLMs sometimes wrap JSON in.
     Handles ```json ... ```, ``` ... ```, and leading/trailing whitespace.
+    Also handles truncated responses by attempting to close open JSON objects.
     """
     text = text.strip()
     if text.startswith("```"):
@@ -64,6 +65,16 @@ def _strip_fences(text: str) -> str:
         text = text[text.index("\n") + 1:] if "\n" in text else text[3:]
     if text.endswith("```"):
         text = text[: text.rfind("```")]
+    text = text.strip()
+
+    # If JSON appears truncated (no closing brace), attempt to repair it
+    # by closing any open string and the object — better than returning None
+    if text.startswith("{") and not text.endswith("}"):
+        # Close any unterminated string value first
+        if text.count('"') % 2 != 0:
+            text += '"'
+        text += "}"
+
     return text.strip()
 
 
@@ -92,28 +103,43 @@ def _call_groq(system: str, user: str, max_tokens: int = 400) -> Optional[str]:
             {"role": "user",   "content": user},
         ],
     }
-    try:
-        log.info("[AI] Calling Groq API — model=%s max_tokens=%d", _model(), max_tokens)
-        resp = _req.post(_API_URL, headers=headers, json=body, timeout=30)
+    import time as _time
+    for attempt in range(3):  # up to 3 attempts with backoff on rate-limit
+        try:
+            log.info("[AI] Calling Groq API — model=%s max_tokens=%d attempt=%d",
+                     _model(), max_tokens, attempt + 1)
+            resp = _req.post(_API_URL, headers=headers, json=body, timeout=30)
 
-        # Log the status so it's visible in docker logs
-        log.info("[AI] Groq response status: %d", resp.status_code)
+            # Log the status so it's visible in docker logs
+            log.info("[AI] Groq response status: %d", resp.status_code)
 
-        if not resp.ok:
-            log.warning("[AI] Groq API error %d: %s", resp.status_code, resp.text[:300])
+            if resp.status_code == 429:
+                # Rate limited — parse retry-after header or use exponential backoff
+                retry_after = int(resp.headers.get("retry-after", 2 ** (attempt + 1)))
+                log.warning("[AI] Groq rate limited (429) — waiting %ds before retry", retry_after)
+                _time.sleep(min(retry_after, 15))  # cap at 15s
+                continue
+
+            if not resp.ok:
+                log.warning("[AI] Groq API error %d: %s", resp.status_code, resp.text[:300])
+                return None
+
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"].strip()
+            log.info("[AI] Groq returned %d chars", len(content))
+            return content
+
+        except _req.exceptions.Timeout:
+            log.warning("[AI] Groq API call timed out after 30s (attempt %d).", attempt + 1)
+            if attempt < 2:
+                _time.sleep(2)
+            continue
+        except Exception as exc:
+            log.warning("[AI] Groq API call failed: %s", exc)
             return None
-
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"].strip()
-        log.info("[AI] Groq returned %d chars", len(content))
-        return content
-
-    except _req.exceptions.Timeout:
-        log.warning("[AI] Groq API call timed out after 30s.")
-        return None
-    except Exception as exc:
-        log.warning("[AI] Groq API call failed: %s", exc)
-        return None
+    # All attempts exhausted
+    log.warning("[AI] All Groq API attempts failed.")
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -151,14 +177,15 @@ def predict_breach_risk(slice_id: str, history_rows: list[dict]) -> dict:
     """
     Analyze telemetry trajectory for a slice and return a risk prediction.
     """
+    key_present = bool(_api_key())
     default = {
         "slice_id":            slice_id,
         "risk_level":          "stable",
         "confidence_pct":      0,
         "features_of_concern": [],
-        "reasoning":           "AI layer not available.",
+        "reasoning":           "Awaiting AI response (may be rate-limited or still loading)." if key_present else "GROQ_API_KEY not set — AI forecasting disabled.",
         "recommended_action":  "Continue monitoring.",
-        "ai_available":        False,
+        "ai_available":        key_present,  # key is set, even if this specific call failed
     }
 
     if not history_rows:
@@ -183,7 +210,7 @@ def predict_breach_risk(slice_id: str, history_rows: list[dict]) -> dict:
         f"{json.dumps(trimmed, separators=(',', ':'))}"
     )
 
-    raw = _call_groq(_FORECASTER_SYSTEM, user_msg, max_tokens=300)
+    raw = _call_groq(_FORECASTER_SYSTEM, user_msg, max_tokens=600)
     if not raw:
         return default
 
@@ -257,7 +284,7 @@ def reason_about_incident(incident: dict, telemetry_window: list[dict]) -> Optio
         f"{json.dumps(trimmed_telemetry, separators=(',', ':'))}"
     )
 
-    raw = _call_groq(_REASONER_SYSTEM, user_msg, max_tokens=400)
+    raw = _call_groq(_REASONER_SYSTEM, user_msg, max_tokens=1024)
     if not raw:
         return None
 
@@ -267,5 +294,16 @@ def reason_about_incident(incident: dict, telemetry_window: list[dict]) -> Optio
         json.loads(cleaned)   # validate — raises if not real JSON
         return cleaned
     except json.JSONDecodeError:
-        log.warning("[AI] Reasoner returned non-JSON after fence strip. raw=%s", raw[:300])
+        # Last resort: extract whatever JSON object we can find in the raw text
+        import re as _re
+        match = _re.search(r'\{.*\}', raw, _re.DOTALL)
+        if match:
+            candidate = match.group(0)
+            try:
+                json.loads(candidate)
+                log.warning("[AI] Reasoner used regex-extracted JSON fallback.")
+                return candidate
+            except json.JSONDecodeError:
+                pass
+        log.warning("[AI] Reasoner returned non-JSON after all attempts. raw=%s", raw[:400])
         return None
