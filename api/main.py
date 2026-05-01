@@ -1,25 +1,25 @@
 """
 api/main.py
 ───────────
-FastAPI scoring API for 5G Slice Isolation Validator.
+FastAPI scoring API for 5G Process Isolation Validator.
 
 Endpoints (all original preserved + new):
   GET  /health                   – liveness + model status
   GET  /score                    – latest scored sample(s) with attack classification
-  GET  /metrics/history          – last N rows per slice
+  GET  /metrics/history          – last N rows per process
   POST /reload-model             – hot-reload model.pkl from disk
   POST /inject-attack            – software-inject anomaly rows into SQLite for demo
-  GET  /inject-attack/status     – list slices with active injections
+  GET  /inject-attack/status     – list processes with active injections
   GET  /incidents                – structured incident log (SQLite + Supabase mirror)
   GET  /incidents/export         – CSV download of incident log
   GET  /audit-log                – paginated anomaly audit table
   GET  /sla                      – SLA compliance % over rolling windows
-  GET  /demo                     – demo control console (HTML)
-  POST /demo/inject              – trigger network breach demo
+  GET  /demo                     – process control console (HTML)
+  POST /demo/inject              – trigger process breach demo
   POST /demo/restore             – restore isolation after demo
-  GET  /demo/status              – current demo breach status
+  GET  /demo/status              – current process breach status
   GET  /model/status             – Capstone 4: model age, drift rate, retrain log
-  POST /exfil/ingest             – ingest cross-slice exfiltration data
+  POST /exfil/ingest             – ingest cross-process exfiltration data
   GET  /exfil/latest             – view latest exfiltrated payloads
 """
 
@@ -305,7 +305,7 @@ def _correlate_slice(conn: sqlite3.Connection, slice_id: str):
             (slice_id, attack_type, first["timestamp"], peak, min_conf)
         )
         conn.commit()
-        log.info("Incident OPENED for %s (%s)", slice_id, attack_type)
+        log.info("Incident OPENED for %s (%s)", slice_id.replace("slice", "process"), attack_type)
 
         # Send email alert for real network breaches detected by the correlator
         try:
@@ -353,7 +353,7 @@ def _correlate_slice(conn: sqlite3.Connection, slice_id: str):
             (now, duration, active["id"])
         )
         conn.commit()
-        log.info("Incident CLOSED for %s after %.1fs", slice_id, duration)
+        log.info("Incident CLOSED for %s after %.1fs", slice_id.replace("slice", "process"), duration)
 
         _sb_close_incident(
             slice_id,
@@ -441,8 +441,8 @@ async def _run_injection(slice_id: str, attack_type: str, duration_s: int = 60):
     profile      = ATTACK_PROFILES.get(attack_type, ATTACK_PROFILES["cpu"])
     end_time     = time.time() + duration_s
     first_row    = True
-    log.info("Injection started: slice=%s type=%s duration=%ds",
-             slice_id, attack_type, duration_s)
+    log.info("Injection started: process=%s type=%s duration=%ds",
+             slice_id.replace("slice", "process"), attack_type, duration_s)
     try:
         while time.time() < end_time:
             with _bundle_lock:
@@ -525,8 +525,8 @@ async def _run_injection(slice_id: str, attack_type: str, duration_s: int = 60):
                         "min_confidence": confidence,
                         "is_active":      True,
                     })
-                    log.info("[inject] Supabase incident opened: slice=%s type=%s",
-                             slice_id, classified_at)
+                    log.info("[inject] Supabase incident opened: process=%s type=%s",
+                             slice_id.replace("slice", "process"), classified_at)
 
                 # 3. Log a model_retrain_log row so the audit trail records
                 #    which slices were active when this attack injection started.
@@ -545,7 +545,7 @@ async def _run_injection(slice_id: str, attack_type: str, duration_s: int = 60):
     finally:
         async with _injection_lock:
             _active_injections.pop(slice_id, None)
-        log.info("Injection finished: slice=%s", slice_id)
+        log.info("Injection finished: process=%s", slice_id.replace("slice", "process"))
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -560,7 +560,7 @@ async def lifespan(app: FastAPI):
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="5G Slice Isolation API", lifespan=lifespan)
+app = FastAPI(title="5G Process Isolation API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -596,7 +596,7 @@ def _do_inject_breach(target_slice: str = "slice-a"):
             attacker, victim = "slice-a", "slice-b"
             breach_net = BREACH_NETWORK  # slice_b_net
 
-        log.info("[demo] Injecting breach: %s → %s via %s", attacker, victim, breach_net)
+        log.info("[demo] Injecting process breach: %s → %s via %s", attacker.replace("slice", "process"), victim.replace("slice", "process"), breach_net)
         _run_cmd(["docker", "network", "connect", breach_net, attacker])
         _run_cmd(["docker", "exec", "-d", victim, "iperf3", "-s"])
         _run_cmd(["docker", "exec", "-d", attacker, "iperf3", "-c", victim, "-t", "30", "-b", "5M"])
@@ -615,7 +615,7 @@ def _do_inject_breach(target_slice: str = "slice-a"):
 
 def _do_restore_isolation():
     global _breach_active
-    log.info("[demo] Restoring isolation → executing powerful recovery commands")
+    log.info("[demo] Restoring process isolation → executing powerful recovery commands")
     
     # Powerful recovery commands as requested
     try:
@@ -646,7 +646,7 @@ def _do_restore_isolation():
         log.error("Restore isolation failed: %s", e)
     
     _breach_active = False
-    log.info("[demo] Isolation restored.")
+    log.info("[demo] Process isolation restored.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -771,7 +771,7 @@ async def inject_attack(
         "slice_id":    slice_id,
         "attack_type": attack_type,
         "duration_s":  duration_s,
-        "message":     (f"Injecting {attack_type} into {slice_id} for {duration_s}s. "
+        "message":     (f"Injecting {attack_type} into {slice_id.replace('slice', 'process')} for {duration_s}s. "
                         "Watch the gauge drop!"),
     }
 
@@ -780,7 +780,7 @@ async def inject_attack(
 async def injection_status():
     async with _injection_lock:
         active = list(_active_injections.keys())
-    return {"active_injections": active}
+    return {"active_injections": [s.replace("slice", "process") for s in active]}
 
 
 # ── Incidents ─────────────────────────────────────────────────────────────────
@@ -919,13 +919,13 @@ def inject_breach(background_tasks: BackgroundTasks, body: InjectRequest = Body(
     if _breach_active:
         return {"status": "already_active", "breach_active": True}
     background_tasks.add_task(_do_inject_breach, body.slice_id)
-    return {"status": "injected", "message": f"Breach started on {body.slice_id}. Watch dashboard in ~15s.", "breach_active": True}
+    return {"status": "injected", "message": f"Process breach started on {body.slice_id.replace('slice', 'process')}. Watch dashboard in ~15s.", "breach_active": True}
 
 @app.post("/demo/restore")
 @app.post("/restore_isolation")
 def restore_isolation_endpoint(background_tasks: BackgroundTasks):
     background_tasks.add_task(_do_restore_isolation)
-    return {"status": "restoring", "message": "Isolation restoring. Recovery in 30-60s.", "breach_active": False}
+    return {"status": "restoring", "message": "Process isolation restoring. Recovery in 30-60s.", "breach_active": False}
 
 @app.get("/demo/status")
 def demo_status():

@@ -58,7 +58,7 @@ def _build_html(slice_id: str, attack_type: str | None,
         f"style='background:#276749;color:#ffffff;text-decoration:none;"
         f"padding:12px 24px;border-radius:6px;font-weight:600;"
         f"font-size:14px;display:inline-block;'>"
-        f"🔒 Restore Isolation</a>"
+        f"🔒 Restore Process Isolation</a>"
     ) if restore_url else ""
 
     return f"""
@@ -77,7 +77,7 @@ def _build_html(slice_id: str, attack_type: str | None,
           <td style="background:{colour};padding:24px 32px;">
             <p style="margin:0;font-size:11px;color:rgba(255,255,255,.8);
                       text-transform:uppercase;letter-spacing:1px;">
-              🔴 Security Alert — Network Slice Isolation Validator
+              🔴 Security Alert — Network Process Isolation Validator
             </p>
             <h1 style="margin:8px 0 0;font-size:22px;color:#ffffff;">
               {label} Detected
@@ -95,9 +95,9 @@ def _build_html(slice_id: str, attack_type: str | None,
               <tr>
                 <td style="background:#f7fafc;border-radius:6px;
                            padding:14px 18px;border-left:4px solid {colour};">
-                  <p style="margin:0;font-size:12px;color:#718096;">Affected Slice</p>
+                  <p style="margin:0;font-size:12px;color:#718096;">Affected Process</p>
                   <p style="margin:4px 0 0;font-size:18px;font-weight:700;
-                            color:#1a202c;">{slice_id}</p>
+                            color:#1a202c;">{slice_id.replace("slice", "process")}</p>
                 </td>
                 <td width="16"></td>
                 <td style="background:#f7fafc;border-radius:6px;
@@ -163,7 +163,7 @@ def _build_html(slice_id: str, attack_type: str | None,
           <td style="background:#f7fafc;padding:16px 32px;
                      border-top:1px solid #e2e8f0;">
             <p style="margin:0;font-size:11px;color:#a0aec0;text-align:center;">
-              5G/6G Network Slicing Isolation Validator — automated alert
+              5G/6G Network Process Isolation Validator — automated alert
             </p>
           </td>
         </tr>
@@ -202,7 +202,7 @@ def send_attack_alert(
         return False
 
     label   = attack_type or "Unknown Anomaly"
-    subject = f"🔴 [{slice_id}] {label} — Isolation Confidence {confidence:.1f}%"
+    subject = f"🔴 [{slice_id.replace('slice', 'process')}] {label} — Isolation Confidence {confidence:.1f}%"
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -211,7 +211,7 @@ def send_attack_alert(
 
     # Plain-text fallback
     plain = (
-        f"ALERT: {label} detected on {slice_id}\n"
+        f"ALERT: {label} detected on {slice_id.replace('slice', 'process')}\n"
         f"Isolation Confidence: {confidence:.1f}%\n"
         f"Features: {features}\n"
         f"Time: {datetime.datetime.utcnow().isoformat()} UTC\n"

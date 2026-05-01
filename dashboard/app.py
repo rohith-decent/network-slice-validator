@@ -1,7 +1,7 @@
 """
 dashboard/app.py
 ────────────────
-Streamlit operator dashboard for 5G Slice Isolation Monitor.
+Streamlit operator dashboard for 5G Process Isolation Monitor.
 
 Pages:
   1. 🛡️ Live Monitor       – gauges, timeline, metric cards, alert feed
@@ -44,7 +44,7 @@ REFRESH_S   = 3
 # ── Page config ────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="5G Slice Isolation Monitor",
+    page_title="OS 360 - Process Isolation Monitor",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -318,17 +318,18 @@ def make_timeline(dfs: dict[str, pd.DataFrame]) -> go.Figure:
         vertical_spacing=0.08,
     )
     colors_map = {"slice-a": "#58a6ff", "slice-b": "#f78166"}
-    for slice_id, df in dfs.items():
+    for sid, df in dfs.items():
         if df.empty:
             continue
-        c = colors_map.get(slice_id, "#8b949e")
+        c = colors_map.get(sid, "#8b949e")
+        label = sid.replace("slice", "process")
         fig.add_trace(go.Scatter(x=df["timestamp"], y=df["cpu_pct"],
-            name=f"{slice_id} CPU", line=dict(color=c, width=1.5)), row=1, col=1)
+            name=f"{label} CPU", line=dict(color=c, width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df["timestamp"], y=df["mem_mb"],
-            name=f"{slice_id} MEM",
+            name=f"{label} MEM",
             line=dict(color=c, width=1.5, dash="dot")), row=2, col=1)
         fig.add_trace(go.Scatter(x=df["timestamp"], y=df["net_rx_kb"],
-            name=f"{slice_id} RX",
+            name=f"{label} RX",
             line=dict(color=c, width=1.5, dash="dash")), row=3, col=1)
         if "anomaly_score" in df.columns and df["anomaly_score"].notna().any():
             anomalies = df[df["anomaly_score"] < 0]
@@ -337,7 +338,7 @@ def make_timeline(dfs: dict[str, pd.DataFrame]) -> go.Figure:
                     x=anomalies["timestamp"], y=anomalies["cpu_pct"],
                     mode="markers",
                     marker=dict(color="#f85149", size=8, symbol="x"),
-                    name=f"{slice_id} anomaly",
+                    name=f"{label} anomaly",
                 ), row=1, col=1)
     fig.update_layout(
         paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
@@ -378,7 +379,7 @@ def render_alert_feed(dfs: dict[str, pd.DataFrame], score_map: dict):
     events.sort(key=lambda e: e["ts"], reverse=True)
     if not events:
         st.markdown(
-            '<div class="normal-card">✅ No anomalies detected — all slices isolated normally.</div>',
+            '<div class="normal-card">✅ No anomalies detected — all processes isolated normally.</div>',
             unsafe_allow_html=True,
         )
         return
@@ -388,7 +389,7 @@ def render_alert_feed(dfs: dict[str, pd.DataFrame], score_map: dict):
         st.markdown(
             f'<div class="alert-card">'
             f'{badge}&nbsp;&nbsp;'
-            f'<strong>{e["slice_id"]}</strong> @ {ts_str} — '
+            f'<strong>{e["slice_id"].replace("slice", "process")}</strong> @ {ts_str} — '
             f'Confidence: <strong>{e["conf"]:.1f}%</strong> | '
             f'Score: {e["score"]:.4f} | '
             f'CPU: {e["cpu"]:.1f}% | MEM: {e["mem"]:.1f}MB | RX: {e["net_rx"]:.2f}KB'
@@ -459,7 +460,7 @@ def generate_pdf_report(incidents: list[dict], audit_df: pd.DataFrame) -> bytes:
     story = []
 
     # Title
-    story.append(Paragraph("5G/6G Network Slicing Isolation Validator", title_style))
+    story.append(Paragraph("5G/6G Network Process Isolation Validator", title_style))
     story.append(Paragraph(
         f"Attack Incident Report  •  Generated {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
         subtitle_style,
@@ -508,7 +509,7 @@ def generate_pdf_report(incidents: list[dict], audit_df: pd.DataFrame) -> bytes:
     if not incidents:
         story.append(Paragraph("No incidents recorded.", body_style))
     else:
-        inc_header = ["#", "Slice", "Attack Type", "Started (UTC)",
+        inc_header = ["#", "Process", "Attack Type", "Started (UTC)",
                       "Resolved", "Duration", "Min Conf%", "Status"]
         inc_data   = [inc_header]
         for idx, inc in enumerate(incidents, 1):
@@ -535,7 +536,7 @@ def generate_pdf_report(incidents: list[dict], audit_df: pd.DataFrame) -> bytes:
             conf     = f"{inc['min_confidence']:.1f}" if inc.get("min_confidence") else "—"
             status   = "Active" if inc.get("is_active") in (1, True) else "Resolved"
             attack   = inc.get("attack_type") or "Unknown"
-            inc_data.append([str(idx), inc["slice_id"], attack,
+            inc_data.append([str(idx), inc["slice_id"].replace("slice", "process"), attack,
                              started, resolved_str, duration, conf, status])
 
         col_w = [0.8*cm, 2.4*cm, 3.4*cm, 4*cm, 2.2*cm, 2*cm, 1.8*cm, 2.2*cm]
@@ -576,7 +577,7 @@ def generate_pdf_report(incidents: list[dict], audit_df: pd.DataFrame) -> bytes:
         if df_anom.empty:
             story.append(Paragraph("No anomalies in current window.", body_style))
         else:
-            audit_header = ["Time", "Slice", "CPU%", "MemMB",
+            audit_header = ["Time", "Process", "CPU%", "MemMB",
                             "RX KB/s", "TX KB/s", "Score", "Attack Type"]
             audit_data   = [audit_header]
             for _, row in df_anom.iterrows():
@@ -584,7 +585,7 @@ def generate_pdf_report(incidents: list[dict], audit_df: pd.DataFrame) -> bytes:
                           if hasattr(row["timestamp"], "strftime") else str(row["timestamp"]))
                 audit_data.append([
                     ts_fmt,
-                    str(row.get("slice_id", "")),
+                    str(row.get("slice_id", "").replace("slice", "process")),
                     f"{row.get('cpu_pct', 0):.1f}",
                     f"{row.get('mem_mb', 0):.1f}",
                     f"{row.get('net_rx_kb', 0):.2f}",
@@ -613,7 +614,7 @@ def generate_pdf_report(incidents: list[dict], audit_df: pd.DataFrame) -> bytes:
     story.append(HRFlowable(width="100%", thickness=0.8,
                              color=colors.HexColor("#d1d5db")))
     story.append(Paragraph(
-        "5G/6G Network Slicing Isolation Validator — Confidential Team Report",
+        "5G/6G Network Process Isolation Validator — Confidential Team Report",
         ParagraphStyle("Footer", parent=styles["Normal"],
                        fontSize=8, textColor=colors.HexColor("#9ca3af"),
                        alignment=TA_CENTER, spaceBefore=6),
@@ -701,7 +702,7 @@ def render_sla_networkx_graph(selected_slices: list[str]) -> None:
               facecolor="#161b22", edgecolor="#30363d",
               labelcolor="#c9d1d9", fontsize=8)
     ax.axis("off")
-    ax.set_title(f"Slice SLA Topology — {window_labels[selected_window]}",
+    ax.set_title(f"Process SLA Topology — {window_labels[selected_window]}",
                  color="#c9d1d9", fontsize=12, pad=10)
     st.pyplot(fig_nx, use_container_width=True)
     plt.close(fig_nx)
@@ -716,7 +717,7 @@ def render_sla_networkx_graph(selected_slices: list[str]) -> None:
         comp = sd.get("compliance", 100.0)
         anom = sd.get("anomalous", 0)
         total= sd.get("total", 0)
-        scatter_rows.append({"Slice": name, "Compliance": comp,
+        scatter_rows.append({"Process": name.replace("slice", "process"), "Compliance": comp,
                              "Anomalies": anom, "Total": total})
     df_sc = pd.DataFrame(scatter_rows)
 
@@ -734,12 +735,12 @@ def render_sla_networkx_graph(selected_slices: list[str]) -> None:
                 mode="markers+text",
                 marker=dict(size=row["SizeVal"], color=row["Color"],
                             opacity=0.85, line=dict(color="#ffffff", width=1.5)),
-                text=[row["Slice"]],
+                text=[row["Process"]],
                 textposition="top center",
                 textfont=dict(color="#c9d1d9", size=11),
-                name=row["Slice"],
+                name=row["Process"],
                 hovertemplate=(
-                    f"<b>{row['Slice']}</b><br>"
+                    f"<b>{row['Process']}</b><br>"
                     f"SLA: {row['Compliance']:.2f}%<br>"
                     f"Anomalies: {row['Anomalies']}<br>"
                     f"Total samples: {row['Total']}<extra></extra>"
@@ -781,7 +782,8 @@ def render_sidebar() -> tuple[str, int, int, list[str]]:
         refresh_rate    = st.slider("Refresh interval (s)", 2, 30, REFRESH_S)
         history_len     = st.slider("History window (points)", 20, 200, 120)
         selected_slices = st.multiselect(
-            "Slices to display", SLICE_NAMES, default=SLICE_NAMES
+            "Processes to display", SLICE_NAMES, default=SLICE_NAMES,
+            format_func=lambda x: x.replace("slice", "process")
         )
 
         st.divider()
@@ -809,7 +811,8 @@ def render_sidebar() -> tuple[str, int, int, list[str]]:
         st.markdown("### 🎯 Attack Simulation")
         st.caption("Injects spiked rows for ~60s so the ML model detects an attack.")
 
-        sim_slice = st.selectbox("Target slice", SLICE_NAMES, key="sim_slice")
+        sim_slice = st.selectbox("Target process", SLICE_NAMES, key="sim_slice",
+                                 format_func=lambda x: x.replace("slice", "process"))
         sim_type  = st.selectbox(
             "Attack type",
             ["cpu", "memory", "network_breach"],
@@ -826,7 +829,7 @@ def render_sidebar() -> tuple[str, int, int, list[str]]:
 
         if is_running:
             st.warning(
-                f"⏳ Injection running on **{sim_slice}** — ~60s total, refreshes every 5s"
+                f"⏳ Injection running on **{sim_slice.replace('slice', 'process')}** — ~60s total, refreshes every 5s"
             )
             st.button("💉 Inject Attack", disabled=True, key="inject_btn")
         else:
@@ -842,7 +845,7 @@ def render_sidebar() -> tuple[str, int, int, list[str]]:
                         if resp.get("status") == "started":
                             st.success(
                                 f"✅ **{sim_type.replace('_', ' ').title()}** injection "
-                                f"started on **{sim_slice}** — watch the gauge drop!"
+                                f"started on **{sim_slice.replace('slice', 'process')}** — watch the gauge drop!"
                             )
                         else:
                             st.info(resp.get("message", "Already running."))
@@ -859,7 +862,7 @@ def render_sidebar() -> tuple[str, int, int, list[str]]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def page_live_monitor(refresh_rate: int, history_len: int, selected_slices: list[str]):
-    st.title("🛡️ 5G Network Slicing Isolation Monitor")
+    st.title("🛡️ OS 360 - Process Isolation Monitor")
     st.caption(
         f"Live telemetry • Refreshes every {refresh_rate}s • "
         f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -877,7 +880,7 @@ def page_live_monitor(refresh_rate: int, history_len: int, selected_slices: list
             conf        = score_data.get("isolation_confidence")
             attack_type = score_data.get("attack_type")
             st.plotly_chart(
-                make_gauge(f"{name} Isolation Confidence", conf),
+                make_gauge(f"{name.replace('slice', 'process').title()} Isolation Confidence", conf),
                 use_container_width=True, key=f"gauge_{name}",
             )
             if attack_type:
@@ -894,15 +897,15 @@ def page_live_monitor(refresh_rate: int, history_len: int, selected_slices: list
         features   = score_data.get("features", {})
         base_i     = i * 4
         with card_cols[base_i]:
-            st.metric(f"{name} CPU", f"{features.get('cpu_pct', 0):.1f}%",
+            st.metric(f"{name.replace('slice', 'process').title()} CPU", f"{features.get('cpu_pct', 0):.1f}%",
                       delta="⚠️ ANOMALY" if score_data.get("is_anomaly") else "normal",
                       delta_color="inverse" if score_data.get("is_anomaly") else "normal")
         with card_cols[base_i + 1]:
-            st.metric(f"{name} MEM", f"{features.get('mem_mb', 0):.1f} MB")
+            st.metric(f"{name.replace('slice', 'process').title()} MEM", f"{features.get('mem_mb', 0):.1f} MB")
         with card_cols[base_i + 2]:
-            st.metric(f"{name} RX", f"{features.get('net_rx_kb', 0):.2f} KB/s")
+            st.metric(f"{name.replace('slice', 'process').title()} RX", f"{features.get('net_rx_kb', 0):.2f} KB/s")
         with card_cols[base_i + 3]:
-            st.metric(f"{name} TX", f"{features.get('net_tx_kb', 0):.2f} KB/s")
+            st.metric(f"{name.replace('slice', 'process').title()} TX", f"{features.get('net_tx_kb', 0):.2f} KB/s")
 
     st.divider()
     st.markdown("### Metric Timeline")
@@ -916,7 +919,7 @@ def page_live_monitor(refresh_rate: int, history_len: int, selected_slices: list
 
     # ── Exfiltration Live Feed ────────────────────────────────────────
     st.markdown("---")
-    st.subheader("🚨 Cross-Slice Exfiltration Monitor")
+    st.subheader("🚨 Cross-Process Exfiltration Monitor")
 
     try:
         resp = requests.get(f"{API_BASE}/exfil/latest?limit=10", timeout=2)
@@ -927,7 +930,7 @@ def page_live_monitor(refresh_rate: int, history_len: int, selected_slices: list
     if not items:
         st.info("🔒 Isolation active — no exfiltration detected")
     else:
-        st.error("⚠️ DATA LEAK DETECTED: slice-a → slice-b")
+        st.error("⚠️ DATA LEAK DETECTED: process-a → process-b")
         for batch in reversed(items):
             ts = batch.get("timestamp", 0)
             label = time.strftime("%H:%M:%S", time.localtime(ts))
@@ -1136,7 +1139,7 @@ def page_audit_log(selected_slices: list[str]):
             st.markdown(
                 f'<div class="{css_cls}">'
                 f'{status} &nbsp; {badge} &nbsp;&nbsp;'
-                f'<strong>{inc["slice_id"]}</strong> — '
+                f'<strong>{inc["slice_id"].replace("slice", "process")}</strong> — '
                 f'Started: {started} &nbsp;|&nbsp; '
                 f'Resolved: {resolved} &nbsp;|&nbsp; '
                 f'Duration: {duration} &nbsp;|&nbsp; '
@@ -1150,14 +1153,14 @@ def page_audit_log(selected_slices: list[str]):
     st.markdown("### 🗂️ Anomaly Audit Table")
     col_f1, col_f2, col_f3 = st.columns(3)
     with col_f1:
-        filter_slice = st.selectbox("Filter by slice", ["All"] + SLICE_NAMES,
+        filter_slice = st.selectbox("Filter by process", ["All"] + [s.replace("slice", "process") for s in SLICE_NAMES],
                                     key="audit_slice")
     with col_f2:
         audit_limit = st.slider("Max rows", 50, 500, 200, key="audit_limit")
     with col_f3:
         anomaly_only = st.checkbox("Anomalies only", value=True, key="audit_anomaly_only")
 
-    slice_param = None if filter_slice == "All" else filter_slice
+    slice_param = None if filter_slice == "All" else filter_slice.replace("process", "slice")
     df_audit = fetch_audit_log(
         slice_id=slice_param, limit=audit_limit, anomaly_only=anomaly_only
     )
@@ -1176,7 +1179,7 @@ def page_audit_log(selected_slices: list[str]):
         cols_show = [c for c in cols_show if c in display_df.columns]
         st.dataframe(
             display_df[cols_show].rename(columns={
-                "timestamp": "Time", "slice_id": "Slice",
+                "timestamp": "Time", "slice_id": "Process",
                 "cpu_pct": "CPU %", "mem_mb": "Mem MB",
                 "net_rx_kb": "RX KB/s", "net_tx_kb": "TX KB/s",
                 "anomaly_score": "Score", "attack_type": "Attack Type",
@@ -1222,7 +1225,7 @@ def page_sla_model_health(selected_slices: list[str]):
             source   = sla_data.get("source", "sqlite")
             color    = "normal" if comp >= 99.5 else ("off" if comp >= 98 else "inverse")
             sla_cols[i * 3 + j].metric(
-                f"{name} SLA {window}", f"{comp:.2f}%",
+                f"{name.replace('slice', 'process').title()} SLA {window}", f"{comp:.2f}%",
                 delta=(
                     f"🟢 OK ({source})" if comp >= 99.5
                     else (f"🟡 Warn ({source})" if comp >= 98
@@ -1232,7 +1235,7 @@ def page_sla_model_health(selected_slices: list[str]):
             )
 
     st.divider()
-    st.markdown("### 🌐 SLA Network Topology Graph")
+    st.markdown("### 🌐 Process SLA Topology Graph")
     st.caption(
         "Node and edge colour reflect SLA compliance tier. "
         "Edge labels show compliance % for the selected window."

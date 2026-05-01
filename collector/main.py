@@ -219,7 +219,7 @@ def run(duration_seconds: Optional[int] = None):
     Main loop. If duration_seconds is set, stops after that many seconds.
     Otherwise runs indefinitely.
     """
-    log.info("Starting collector | slices=%s interval=%ds db=%s",
+    log.info("Starting collector | processes=%s interval=%ds db=%s",
              SLICE_NAMES, INTERVAL, DB_PATH)
     conn = get_db()
     start = time.time()
@@ -232,7 +232,7 @@ def run(duration_seconds: Optional[int] = None):
             if written > 0:
                 log.info("Cycle %d: wrote %d rows", cycles, written)
             else:
-                log.info("Cycle %d: no rows written (slices may still be starting)", cycles)
+                log.info("Cycle %d: no rows written (processes may still be starting)", cycles)
 
             if duration_seconds and (time.time() - start) >= duration_seconds:
                 log.info("Duration %ds elapsed — stopping baseline collection.", duration_seconds)

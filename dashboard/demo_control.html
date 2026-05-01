@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
-  <title>5G Slice Control</title>
+  <title>5G Process Control</title>
   <style>
     /* ─── Reset & Base ─────────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -262,33 +262,33 @@
 
   <!-- Header -->
   <div class="header">
-    <div class="badge">5G Slice Control Plane</div>
-    <h1>🛡️ Isolation Validator<br>Control Console</h1>
-    <p class="subtitle">Tap to attack Slice A or Slice B independently</p>
+    <div class="badge">5G Process Control Plane</div>
+    <h1>🛡️ Process Isolation Validator<br>Control Console</h1>
+    <p class="subtitle">Tap to attack Process A or Process B independently</p>
   </div>
 
   <!-- Status Card -->
   <div class="status-card">
     <div class="status-dot normal" id="statusDot"></div>
     <div class="status-text">
-      <div class="status-label" id="statusLabel">Checking isolation status…</div>
+      <div class="status-label" id="statusLabel">Checking process isolation status…</div>
       <div class="status-sub" id="statusSub">Connecting to API…</div>
     </div>
   </div>
 
   <!-- Confidence Display -->
   <div class="confidence-wrap">
-    <div class="confidence-label">Live Isolation Confidence</div>
+    <div class="confidence-label">Live Process Isolation Confidence</div>
     <div class="confidence-row">
       <div class="conf-block">
-        <div class="conf-name">slice-a</div>
+        <div class="conf-name">process-a</div>
         <div class="conf-value high" id="confA">—</div>
         <div class="conf-bar-wrap">
           <div class="conf-bar" id="barA" style="width:0%;background:#3fb950"></div>
         </div>
       </div>
       <div class="conf-block">
-        <div class="conf-name">slice-b</div>
+        <div class="conf-name">process-b</div>
         <div class="conf-value high" id="confB">—</div>
         <div class="conf-bar-wrap">
           <div class="conf-bar" id="barB" style="width:0%;background:#3fb950"></div>
@@ -301,23 +301,23 @@
   <div class="button-group">
     <button class="btn btn-inject" id="btnInjectA" onclick="triggerInject('slice-a')">
       <span class="btn-icon">💥</span>
-      ATTACK SLICE A
+      ATTACK PROCESS A
     </button>
     <button class="btn btn-inject" id="btnInjectB" onclick="triggerInject('slice-b')">
       <span class="btn-icon">💥</span>
-      ATTACK SLICE B
+      ATTACK PROCESS B
     </button>
     <button class="btn btn-inject" id="btnInjectBoth" onclick="triggerInject('BOTH')" style="background: linear-gradient(135deg, #b71c1c, #d32f2f);">
       <span class="btn-icon">💀</span>
-      ATTACK BOTH SLICES
+      ATTACK BOTH PROCESSES
     </button>
     <button class="btn btn-stress" id="btnRestore" onclick="restoreIsolation()" style="background: linear-gradient(135deg, #1b5e20, #43a047);">
       <span class="btn-icon">🛡️</span>
-      RESTORE ISOLATION
+      RESTORE PROCESS ISOLATION
     </button>
     <button class="btn btn-stress" id="btnStress" onclick="triggerCpuStress()">
       <span class="btn-icon">🔥</span>
-      CPU STRESS (slice-a)
+      CPU STRESS (process-a)
     </button>
   </div>
 
@@ -354,7 +354,7 @@
     <a href="javascript:void(0)" id="dashLink">📊 Open Operator Dashboard</a>
   </div>
 
-  <div class="footer">5G/6G Network Slicing Isolation Validator · Hackathon Demo</div>
+  <div class="footer">5G/6G Network Process Isolation Validator · Hackathon Demo</div>
 
 <script>
   // ── Config — auto-detects API base from current URL origin ─────────────────
@@ -464,12 +464,12 @@
 
       if (breachActive) {
         dot.className    = 'status-dot breach';
-        label.textContent = '⚠️  ISOLATION BREACH ACTIVE';
-        sub.textContent  = `Cross-slice traffic injected · ${Math.round(elapsed)}s elapsed`;
+        label.textContent = '⚠️  PROCESS ISOLATION BREACH ACTIVE';
+        sub.textContent  = `Cross-process traffic injected · ${Math.round(elapsed)}s elapsed`;
         updateTimeline(elapsed);
       } else {
         dot.className    = 'status-dot normal';
-        label.textContent = '✅  All slices isolated normally';
+        label.textContent = '✅  All processes isolated normally';
         sub.textContent  = 'Monitoring active · ML scoring live';
         if (injectTime && elapsed < 5) {
           // Just restored — show recovery timeline
@@ -497,7 +497,7 @@
     if (sliceId === 'BOTH') btnId = 'btnInjectBoth';
     
     document.getElementById(btnId).disabled = true;
-    showToast(`Sending breach injection command for ${sliceId}…`, 'info');
+    showToast(`Sending breach injection command for ${sliceId.replace('slice', 'process')}…`, 'info');
     try {
       const r = await fetch(`${API}/inject_attack`, {
         method: 'POST',
@@ -507,7 +507,7 @@
       const d = await r.json();
       if (d.status === 'injected') {
         injectTime = Date.now();
-        showToast(`✅ Breach injected on ${sliceId}! Watch the dashboard gauge drop in ~15 seconds.`, 'success');
+        showToast(`✅ Breach injected on ${sliceId.replace('slice', 'process')}! Watch the dashboard gauge drop in ~15 seconds.`, 'success');
       } else if (d.status === 'already_active') {
         showToast(`⚠️ Breach already active.`, 'error');
         document.getElementById(btnId).disabled = false;
@@ -525,14 +525,14 @@
   async function restoreIsolation() {
     const btn = document.getElementById('btnRestore');
     btn.disabled = true;
-    showToast('Restoring isolation and executing recovery commands…', 'info');
+    showToast('Restoring process isolation and executing recovery commands…', 'info');
     try {
       const r = await fetch(`${API}/restore_isolation`, {
         method: 'POST'
       });
       const d = await r.json();
       if (d.status === 'restoring') {
-        showToast('✅ Isolation restoration command sent. Confidence will recover soon.', 'success');
+        showToast('✅ Process isolation restoration command sent. Confidence will recover soon.', 'success');
         injectTime = null; // Reset timeline
       } else {
         showToast(`Response: ${d.message}`, 'info');
@@ -546,11 +546,11 @@
 
   // ── CPU stress (bonus scenario) ────────────────────────────────────────────
   async function triggerCpuStress() {
-    showToast('Triggering CPU stress on slice-a…', 'info');
+    showToast('Triggering CPU stress on process-a…', 'info');
     try {
       const r = await fetch(`${API}/demo/stress`, { method: 'POST' });
       if (r.ok) {
-        showToast('🔥 CPU stress started on slice-a. Watch CPU% on dashboard.', 'success');
+        showToast('🔥 CPU stress started on process-a. Watch CPU% on dashboard.', 'success');
       } else {
         showToast('CPU stress endpoint not available — add /demo/stress to api/main.py', 'error');
       }
